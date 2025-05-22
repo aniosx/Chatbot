@@ -1,235 +1,208 @@
 import os
 import json
 import random
-import time
-from dotenv import load_dotenv
-from telegram import Update, ForceReply
+import threading
+from flask import Flask
+from telegram import Update
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 
-load_dotenv()
-
+# إعدادات
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-OWNER_ID = int(os.getenv("OWNER_ID"))
-ACCESS_PASSWORD = os.getenv("ACCESS_PASSWORD")
-PORT = int(os.getenv("PORT", 10000))
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+PORT = int(os.getenv("PORT", "10000"))
+ACCESS_PASSWORD = os.getenv("ACCESS_PASSWORD", "pass123")
 
+app = Flask(__name__)
+
+# بيانات
 USERS_FILE = "users.json"
-SETTINGS_FILE = "settings.json"
+STATE_FILE = "state.json"
+MESSAGE_LIMIT = 6
+TIME_WINDOW = 60  # ثانية
 
-if not os.path.exists(USERS_FILE):
-    with open(USERS_FILE, "w") as f:
-        json.dump({}, f)
-
-if not os.path.exists(SETTINGS_FILE):
-    with open(SETTINGS_FILE, "w") as f:
-        json.dump({"password_required": True}, f)
-
-
-def load_users():
-    with open(USERS_FILE, "r") as f:
+# تحميل أو إنشاء الملفات
+def load_data(filename, default):
+    if not os.path.exists(filename):
+        with open(filename, "w") as f:
+            json.dump(default, f)
+    with open(filename, "r") as f:
         return json.load(f)
 
+def save_data(filename, data):
+    with open(filename, "w") as f:
+        json.dump(data, f)
 
-def save_users(users):
-    with open(USERS_FILE, "w") as f:
-        json.dump(users, f)
+users = load_data(USERS_FILE, {})
+state = load_data(STATE_FILE, {"password_enabled": True})
+message_times = {}
 
-
-def load_settings():
-    with open(SETTINGS_FILE, "r") as f:
-        return json.load(f)
-
-
-def save_settings(settings):
-    with open(SETTINGS_FILE, "w") as f:
-        json.dump(settings, f)
-
-
-def get_new_alias(users):
+# إنشاء اسم وهمي عشوائي
+def generate_alias():
     while True:
-        alias = f"{random.randint(1000, 9999)}"
-        if alias not in [u["alias"] for u in users.values()]:
+        alias = ''.join(random.choices("ABCDEFGHIJKLMNOPQRSTUVWXYZ", k=4))
+        if alias not in users.values():
             return alias
 
-
-def start(update: Update, context: CallbackContext):
+# معالجة الرسائل
+def handle_message(update: Update, context: CallbackContext):
     user_id = str(update.effective_user.id)
-    users = load_users()
-    settings = load_settings()
 
     if user_id not in users:
-        if settings["password_required"]:
+        if state.get("password_enabled", True):
             context.bot.send_message(chat_id=update.effective_chat.id,
-                                     text="يرجى إدخال كلمة المرور باستخدام الأمر:\n/password كلمتك")
+                                     text="أدخل كلمة المرور للانضمام:")
             return
-        alias = get_new_alias(users)
-        users[user_id] = {
-            "alias": alias,
-            "blocked": False,
-            "last_messages": []
-        }
-        save_users(users)
+        alias = generate_alias()
+        users[user_id] = alias
+        save_data(USERS_FILE, users)
         context.bot.send_message(chat_id=update.effective_chat.id,
-                                 text=f"مرحبًا بك في الدردشة! رقمك هو: {alias}")
+                                 text=f"أهلاً بك! تم إعطاؤك الاسم: {alias}")
+    elif user_id in blocked:
+        return
+    else:
+        # الحماية من السبام
+        now = context.job_queue._dispatcher.time()
+        times = message_times.get(user_id, [])
+        times = [t for t in times if now - t < TIME_WINDOW]
+        if len(times) >= MESSAGE_LIMIT:
+            context.bot.send_message(chat_id=update.effective_chat.id,
+                                     text="تم منعك مؤقتاً من إرسال الرسائل لكثرة الإرسال.")
+            return
+        times.append(now)
+        message_times[user_id] = times
 
+        # إرسال الرسالة لجميع المستخدمين
+        alias = users[user_id]
+        text = f"{alias}: {update.message.text}"
+        for uid in users:
+            if uid != user_id and uid not in blocked:
+                try:
+                    context.bot.send_message(chat_id=int(uid), text=text)
+                except:
+                    continue
+
+# أمر /start
+def start(update: Update, context: CallbackContext):
+    user_id = str(update.effective_user.id)
+    if user_id not in users:
+        if state.get("password_enabled", True):
+            context.bot.send_message(chat_id=update.effective_chat.id,
+                                     text="مرحبًا! أدخل كلمة المرور للانضمام:")
+        else:
+            alias = generate_alias()
+            users[user_id] = alias
+            save_data(USERS_FILE, users)
+            context.bot.send_message(chat_id=update.effective_chat.id,
+                                     text=f"أهلاً بك! تم إعطاؤك الاسم: {alias}")
     else:
         context.bot.send_message(chat_id=update.effective_chat.id,
-                                 text=f"مرحبًا مجددًا! رقمك هو: {users[user_id]['alias']}")
+                                 text="أنت مسجل مسبقاً.")
 
-
+# أمر /password لإدخال كلمة المرور
 def password(update: Update, context: CallbackContext):
     user_id = str(update.effective_user.id)
-    users = load_users()
+    if not context.args:
+        return update.message.reply_text("يرجى كتابة كلمة المرور بعد الأمر.")
 
-    if user_id in users:
-        update.message.reply_text("أنت بالفعل مسجل.")
-        return
-
-    if len(context.args) == 0:
-        update.message.reply_text("يرجى كتابة كلمة المرور بعد الأمر.")
-        return
-
-    input_pass = context.args[0]
-    if input_pass == ACCESS_PASSWORD:
-        alias = get_new_alias(users)
-        users[user_id] = {
-            "alias": alias,
-            "blocked": False,
-            "last_messages": []
-        }
-        save_users(users)
-        update.message.reply_text(f"تم تسجيلك بنجاح! رقمك هو: {alias}")
+    if ACCESS_PASSWORD and context.args[0] == ACCESS_PASSWORD:
+        alias = generate_alias()
+        users[user_id] = alias
+        save_data(USERS_FILE, users)
+        update.message.reply_text(f"تم تسجيلك! اسمك: {alias}")
     else:
-        update.message.reply_text("كلمة المرور غير صحيحة.")
+        update.message.reply_text("كلمة المرور خاطئة.")
 
+# قائمة المحظورين
+blocked = set()
 
-def admin_only(func):
-    def wrapper(update: Update, context: CallbackContext):
-        if update.effective_user.id != OWNER_ID:
-            update.message.reply_text("هذا الأمر مخصص للمسؤول فقط.")
-            return
-        return func(update, context)
-    return wrapper
+# أوامر الإدارة
+def admin(update: Update, context: CallbackContext):
+    if update.effective_user.id != OWNER_ID:
+        return
+    update.message.reply_text("/users - عرض المستخدمين\n/block XXXX - حظر مستخدم\n/unblock XXXX - رفع الحظر\n/broadcast رسالة\n/password_toggle - تفعيل/تعطيل كلمة المرور")
 
-
-@admin_only
-def toggle_password(update: Update, context: CallbackContext):
-    settings = load_settings()
-    settings["password_required"] = not settings["password_required"]
-    save_settings(settings)
-    state = "مفعلة" if settings["password_required"] else "معطلة"
-    update.message.reply_text(f"تم تغيير حالة كلمة المرور إلى: {state}")
-
-
-@admin_only
-def list_users(update: Update, context: CallbackContext):
-    users = load_users()
+def users_list(update: Update, context: CallbackContext):
+    if update.effective_user.id != OWNER_ID:
+        return
     msg = "المستخدمون:\n"
-    for uid, data in users.items():
-        status = "محظور" if data["blocked"] else "نشط"
-        msg += f"رقم {data['alias']} - {status}\n"
+    for uid, alias in users.items():
+        status = "محظور" if uid in blocked else "نشط"
+        msg += f"{alias} - {uid} - {status}\n"
     update.message.reply_text(msg)
 
-
-@admin_only
-def block_user(update: Update, context: CallbackContext):
-    if not context.args:
-        update.message.reply_text("يرجى تحديد رقم المستخدم.")
+def block(update: Update, context: CallbackContext):
+    if update.effective_user.id != OWNER_ID:
         return
-    alias = context.args[0]
-    users = load_users()
-    for uid, data in users.items():
-        if data["alias"] == alias:
-            data["blocked"] = True
-            save_users(users)
-            update.message.reply_text(f"تم حظر المستخدم {alias}")
-            return
-    update.message.reply_text("المستخدم غير موجود.")
-
-
-@admin_only
-def unblock_user(update: Update, context: CallbackContext):
     if not context.args:
-        update.message.reply_text("يرجى تحديد رقم المستخدم.")
-        return
+        return update.message.reply_text("اكتب الاسم الوهمي بعد الأمر.")
     alias = context.args[0]
-    users = load_users()
-    for uid, data in users.items():
-        if data["alias"] == alias:
-            data["blocked"] = False
-            save_users(users)
-            update.message.reply_text(f"تم رفع الحظر عن المستخدم {alias}")
-            return
-    update.message.reply_text("المستخدم غير موجود.")
+    uid = next((uid for uid, a in users.items() if a == alias), None)
+    if uid:
+        blocked.add(uid)
+        update.message.reply_text(f"تم حظر {alias}")
+    else:
+        update.message.reply_text("لم يتم العثور على المستخدم.")
 
+def unblock(update: Update, context: CallbackContext):
+    if update.effective_user.id != OWNER_ID:
+        return
+    if not context.args:
+        return update.message.reply_text("اكتب الاسم الوهمي بعد الأمر.")
+    alias = context.args[0]
+    uid = next((uid for uid, a in users.items() if a == alias), None)
+    if uid:
+        blocked.discard(uid)
+        update.message.reply_text(f"تم رفع الحظر عن {alias}")
+    else:
+        update.message.reply_text("لم يتم العثور على المستخدم.")
 
-@admin_only
 def broadcast(update: Update, context: CallbackContext):
-    if not context.args:
-        update.message.reply_text("يرجى كتابة الرسالة.")
+    if update.effective_user.id != OWNER_ID:
         return
-    users = load_users()
     msg = " ".join(context.args)
     for uid in users:
         try:
-            context.bot.send_message(chat_id=int(uid), text=f"رسالة من المسؤول:\n{msg}")
+            context.bot.send_message(chat_id=int(uid), text=f"رسالة من الإدارة:\n{msg}")
         except:
             continue
-    update.message.reply_text("تم إرسال الرسالة لجميع المستخدمين.")
+    update.message.reply_text("تم إرسال الرسالة.")
 
-
-def handle_message(update: Update, context: CallbackContext):
-    user_id = str(update.effective_user.id)
-    users = load_users()
-
-    if user_id not in users:
-        update.message.reply_text("يرجى استخدام /start أولاً.")
+def password_toggle(update: Update, context: CallbackContext):
+    if update.effective_user.id != OWNER_ID:
         return
+    state["password_enabled"] = not state.get("password_enabled", True)
+    save_data(STATE_FILE, state)
+    status = "مفعّلة" if state["password_enabled"] else "معطّلة"
+    update.message.reply_text(f"تم تغيير حالة كلمة المرور إلى: {status}")
 
-    if users[user_id]["blocked"]:
-        update.message.reply_text("أنت محظور من استخدام البوت.")
-        return
+# Flask route
+@app.route('/')
+def index():
+    return "البوت يعمل!"
 
-    now = time.time()
-    timestamps = users[user_id].get("last_messages", [])
-    timestamps = [t for t in timestamps if now - t < 60]
-
-    if len(timestamps) >= 6:
-        update.message.reply_text("تم تجاوز الحد المسموح به (6 رسائل في الدقيقة). انتظر قليلاً.")
-        return
-
-    timestamps.append(now)
-    users[user_id]["last_messages"] = timestamps
-    save_users(users)
-
-    text = update.message.text
-    alias = users[user_id]["alias"]
-
-    for uid, data in users.items():
-        if uid != user_id and not data["blocked"]:
-            try:
-                context.bot.send_message(chat_id=int(uid), text=f"{alias}: {text}")
-            except:
-                continue
-
+# بدء Flask في Thread
+def run_flask():
+    app.run(host='0.0.0.0', port=PORT)
 
 def main():
+    threading.Thread(target=run_flask).start()
+
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
 
+    # الأوامر
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("password", password))
-    dp.add_handler(CommandHandler("toggle_password", toggle_password))
-    dp.add_handler(CommandHandler("users", list_users))
-    dp.add_handler(CommandHandler("block", block_user))
-    dp.add_handler(CommandHandler("unblock", unblock_user))
+    dp.add_handler(CommandHandler("admin", admin))
+    dp.add_handler(CommandHandler("users", users_list))
+    dp.add_handler(CommandHandler("block", block))
+    dp.add_handler(CommandHandler("unblock", unblock))
     dp.add_handler(CommandHandler("broadcast", broadcast))
-
+    dp.add_handler(CommandHandler("password_toggle", password_toggle))
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
 
     updater.start_polling()
     updater.idle()
 
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
