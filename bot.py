@@ -75,10 +75,11 @@ app = Flask(__name__)
 def is_password_required():
     return bool(ACCESS_PASSWORD.strip())
 
-def welcome_text(user_id):
-    alias = users_data[user_id]["alias"]
-    return f"🚀 مرحباً {alias}!" if not is_password_required() else \
-           f"🔒 أدخل كلمة المرور للانضمام يا {alias}."
+def welcome_text(uid):
+    alias = users_data[uid]["alias"]
+    if is_password_required() and not users_data[uid]["pwd_ok"]:
+        return f"🔒 أرسل كلمة المرور للانضمام يا {alias}."
+    return f"🚀 مرحباً {alias}! يمكنك الآن الدردشة."
 
 def broadcast_to_others(sender_id, func):
     for uid, info in users_data.items():
@@ -111,11 +112,10 @@ def handle_text(update: Update, context: CallbackContext):
         return
 
     user = users_data[uid]
-    # block check
     if user["blocked"]:
         return
 
-    # password check
+    # Password check
     if is_password_required() and not user["pwd_ok"]:
         if text.strip() == ACCESS_PASSWORD:
             user["pwd_ok"] = True
@@ -126,31 +126,30 @@ def handle_text(update: Update, context: CallbackContext):
             update.message.reply_text("🔒 كلمة المرور خاطئة.")
         return
 
-    # first join
+    # First join
     if not user["joined"]:
         user["joined"] = True
         save_users()
         update.message.reply_text(f"✅ {user['alias']}، يمكنك الآن الدردشة.")
         return
 
-    # rate limit
+    # Rate limit
     if not can_send(uid):
         update.message.reply_text("⚠️ تجاوزت 5 رسائل في الدقيقة. انتظر قليلاً.")
         return
 
-    # broadcast text
+    # Broadcast text
     alias = user["alias"]
-    broadcast_to_others(uid,
-        lambda cid: context.bot.send_message(cid, f"[{alias}] {text}")
-    )
+    broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[{alias}] {text}"))
 
 def handle_sticker(update: Update, context: CallbackContext):
     uid = str(update.effective_chat.id)
     user = users_data.get(uid)
     if not user or user["blocked"] or not user["joined"]:
         return
-    # broadcast sticker
     sid = update.message.sticker.file_id
+    alias = user["alias"]
+    broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[{alias}] أرسل ستيكر:"))
     broadcast_to_others(uid, lambda cid: context.bot.send_sticker(cid, sticker=sid))
 
 def handle_photo(update: Update, context: CallbackContext):
@@ -163,6 +162,8 @@ def handle_photo(update: Update, context: CallbackContext):
         update.message.reply_text("❌ الصورة أكبر من 20 ميغابايت.")
         return
     fid = photo.file_id
+    alias = user["alias"]
+    broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[{alias}] أرسل صورة:"))
     broadcast_to_others(uid, lambda cid: context.bot.send_photo(cid, photo=fid))
 
 def handle_video(update: Update, context: CallbackContext):
@@ -175,6 +176,8 @@ def handle_video(update: Update, context: CallbackContext):
         update.message.reply_text("❌ الفيديو أكبر من 20 ميغابايت.")
         return
     vid = video.file_id
+    alias = user["alias"]
+    broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[{alias}] أرسل فيديو:"))
     broadcast_to_others(uid, lambda cid: context.bot.send_video(cid, video=vid))
 
 def handle_document(update: Update, context: CallbackContext):
@@ -187,9 +190,9 @@ def handle_document(update: Update, context: CallbackContext):
         update.message.reply_text("❌ الملف أكبر من 20 ميغابايت.")
         return
     did = doc.file_id
-    broadcast_to_others(uid,
-        lambda cid: context.bot.send_document(cid, document=did)
-    )
+    alias = user["alias"]
+    broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[{alias}] أرسل ملف:"))
+    broadcast_to_others(uid, lambda cid: context.bot.send_document(cid, document=did))
 
 # ─── Admin Commands ─────────────────────────────────────────────────────────
 
@@ -204,15 +207,15 @@ def admin_only(func):
 def cmd_users(update: Update, context: CallbackContext):
     lines = []
     for uid, info in users_data.items():
-        status = "🚫" if info["blocked"] else "✅"
         if info["joined"]:
+            status = "🚫" if info["blocked"] else "✅"
             lines.append(f"{info['alias']} ({uid}) {status}")
-    text = "👥 المستخدمون النشطون:\n" + "\n".join(lines)
-    update.message.reply_text(text or "لا يوجد مستخدمون.")
+    update.message.reply_text("👥 المستخدمون النشطون:\n" + "\n".join(lines))
 
 @admin_only
 def cmd_block(update: Update, context: CallbackContext):
-    if not context.args: return update.message.reply_text("Usage: /block ALIAS")
+    if not context.args:
+        return update.message.reply_text("Usage: /block ALIAS")
     target = context.args[0]
     for uid, info in users_data.items():
         if info["alias"] == target:
@@ -223,7 +226,8 @@ def cmd_block(update: Update, context: CallbackContext):
 
 @admin_only
 def cmd_unblock(update: Update, context: CallbackContext):
-    if not context.args: return update.message.reply_text("Usage: /unblock ALIAS")
+    if not context.args:
+        return update.message.reply_text("Usage: /unblock ALIAS")
     target = context.args[0]
     for uid, info in users_data.items():
         if info["alias"] == target:
@@ -235,7 +239,8 @@ def cmd_unblock(update: Update, context: CallbackContext):
 @admin_only
 def cmd_broadcast(update: Update, context: CallbackContext):
     text = " ".join(context.args)
-    if not text: return update.message.reply_text("Usage: /broadcast MESSAGE")
+    if not text:
+        return update.message.reply_text("Usage: /broadcast MESSAGE")
     for uid, info in users_data.items():
         if info["joined"] and not info["blocked"]:
             context.bot.send_message(int(uid), f"📣 {text}")
@@ -250,7 +255,6 @@ def cmd_setpassword(update: Update, context: CallbackContext):
     else:
         ACCESS_PASSWORD = context.args[0]
         update.message.reply_text(f"✅ كلمة المرور أصبحت: {ACCESS_PASSWORD}")
-    # reset user pwd_ok
     for u in users_data.values():
         u["pwd_ok"] = not bool(ACCESS_PASSWORD)
         if u["pwd_ok"]:
@@ -265,7 +269,6 @@ dispatcher.add_handler(MessageHandler(Filters.sticker, handle_sticker))
 dispatcher.add_handler(MessageHandler(Filters.photo, handle_photo))
 dispatcher.add_handler(MessageHandler(Filters.video, handle_video))
 dispatcher.add_handler(MessageHandler(Filters.document, handle_document))
-
 dispatcher.add_handler(CommandHandler("users", cmd_users))
 dispatcher.add_handler(CommandHandler("block", cmd_block))
 dispatcher.add_handler(CommandHandler("unblock", cmd_unblock))
