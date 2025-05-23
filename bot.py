@@ -1,92 +1,264 @@
-import os import json import random import logging from flask import Flask, request from telegram import Update, Bot, File from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, Dispatcher
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
-Logging setup
+import os
+import json
+import random
+import time
+import logging
+from threading import Thread
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO) logger = logging.getLogger(name)
+from flask import Flask, request
+from telegram import Update, Bot
+from telegram.ext import (
+    Updater, Dispatcher,
+    CommandHandler, MessageHandler, Filters, CallbackContext
+)
 
-Load or initialize users data
+# ─── Configuration & Logging ────────────────────────────────────────────────
+logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s",
+                    level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-if os.path.exists("users.json"): with open("users.json", "r") as f: users = json.load(f) else: users = {}
+# ─── Environment Variables ───────────────────────────────────────────────────
+TOKEN           = os.getenv("TELEGRAM_TOKEN")
+OWNER_ID        = int(os.getenv("OWNER_ID", "0"))
+PORT            = int(os.getenv("PORT", "8443"))
+ACCESS_PASSWORD = os.getenv("ACCESS_PASSWORD", "").strip()
+MODE            = os.getenv("MODE", "webhook")  # "webhook" or "polling"
+WEBHOOK_URL     = os.getenv("WEBHOOK_URL", "").rstrip("/")
 
-if os.path.exists("state.json"): with open("state.json", "r") as f: state = json.load(f) else: state = {"blocked": [], "admin_ids": [], "password": ""}
+if not TOKEN or OWNER_ID == 0:
+    logger.error("Please set TELEGRAM_TOKEN and OWNER_ID environment variables.")
+    exit(1)
 
-Save data
+# ─── Persistence ────────────────────────────────────────────────────────────
+USERS_FILE = "users.json"
+STATE_FILE = "state.json"
 
-def save_users(): with open("users.json", "w") as f: json.dump(users, f)
+# load or init users
+if os.path.exists(USERS_FILE):
+    with open(USERS_FILE, "r", encoding="utf-8") as f:
+        users_data = json.load(f)
+else:
+    users_data = {}
 
-def save_state(): with open("state.json", "w") as f: json.dump(state, f)
+# load or init state (password & blocked list)
+if os.path.exists(STATE_FILE):
+    with open(STATE_FILE, "r", encoding="utf-8") as f:
+        state = json.load(f)
+else:
+    state = {"password": ACCESS_PASSWORD, "blocked": []}
 
-Create Bot
+def save_users():
+    with open(USERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(users_data, f, ensure_ascii=False, indent=2)
 
-TOKEN = os.environ.get("BOT_TOKEN") PORT = int(os.environ.get("PORT", 5000)) MODE = os.environ.get("MODE", "webhook") bot = Bot(token=TOKEN)
+def save_state():
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
 
-Flask app for webhook
+def generate_alias():
+    return "".join(random.choices("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", k=4))
 
-app = Flask(name)
+# ─── Rate limiting & File size ──────────────────────────────────────────────
+MAX_MESSAGES_PER_MINUTE = 5
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
-@app.route(f"/{TOKEN}", methods=["POST"]) def webhook(): update = Update.de_json(request.get_json(force=True), bot) dispatcher.process_update(update) return "OK"
+message_timestamps = {}  # user_id -> [timestamps]
 
-@app.route("/") def index(): return "Bot is running."
+def can_send(user_id):
+    now = time.time()
+    times = message_timestamps.get(user_id, [])
+    times = [t for t in times if now - t < 60]
+    if len(times) >= MAX_MESSAGES_PER_MINUTE:
+        message_timestamps[user_id] = times
+        return False
+    times.append(now)
+    message_timestamps[user_id] = times
+    return True
 
-Generate random anonymous ID
+# ─── Bot & Flask Setup ──────────────────────────────────────────────────────
+bot = Bot(token=TOKEN)
+updater = Updater(token=TOKEN, use_context=True)
+dispatcher: Dispatcher = updater.dispatcher
+app = Flask(__name__)
 
-def get_random_name(): return "User" + str(random.randint(1000, 9999))
+# ─── Helpers ────────────────────────────────────────────────────────────────
+def is_password_required():
+    return bool(state.get("password"))
 
-Command handlers
+def welcome_text(uid):
+    alias = users_data[uid]["alias"]
+    if is_password_required() and not users_data[uid]["pwd_ok"]:
+        return f"🔒 أرسل كلمة المرور للانضمام يا {alias}."
+    return f"🚀 مرحباً {alias}! يمكنك الآن الدردشة."
 
-def cmd_start(update: Update, context: CallbackContext): uid = str(update.effective_user.id) if uid not in users: users[uid] = { "name": get_random_name(), "blocked": False } save_users() update.message.reply_text("أهلاً بك في البوت. يمكنك إرسال رسائل وسيتم توصيلها للمجموعة.")
+def broadcast_to_others(sender_id, func):
+    for uid, info in users_data.items():
+        if uid != sender_id and info["joined"] and not info["blocked"]:
+            try:
+                func(int(uid))
+            except Exception as e:
+                logger.warning(f"Failed to send to {uid}: {e}")
 
-def cmd_help(update: Update, context: CallbackContext): update.message.reply_text("أرسل رسالتك هنا بشكل مجهول.")
+def admin_only(func):
+    def wrapper(update: Update, context: CallbackContext):
+        if update.effective_user.id != OWNER_ID:
+            update.message.reply_text("🚫 ليس لديك صلاحية.")
+            return
+        return func(update, context)
+    return wrapper
 
-def cmd_block(update: Update, context: CallbackContext): if update.effective_user.id not in state["admin_ids"]: return if context.args: uid = context.args[0] state["blocked"].append(uid) save_state() update.message.reply_text(f"تم حظر المستخدم {uid}.") try: bot.send_message(chat_id=int(uid), text="تم حظرك من استخدام البوت.") except: pass
+# ─── Command Handlers ───────────────────────────────────────────────────────
+def cmd_start(update: Update, context: CallbackContext):
+    uid = str(update.effective_chat.id)
+    if uid not in users_data:
+        users_data[uid] = {
+            "alias": generate_alias(),
+            "blocked": False,
+            "joined": False,
+            "pwd_ok": not is_password_required()
+        }
+        save_users()
+    update.message.reply_text(welcome_text(uid))
 
-def cmd_unblock(update: Update, context: CallbackContext): if update.effective_user.id not in state["admin_ids"]: return if context.args: uid = context.args[0] if uid in state["blocked"]: state["blocked"].remove(uid) save_state() update.message.reply_text(f"تم مسح الحظر عن المستخدم {uid}.") try: bot.send_message(chat_id=int(uid), text="تم رفع الحظر عنك ويمكنك استخدام البوت الآن.") except: pass
-
-def cmd_blocked(update: Update, context: CallbackContext): if update.effective_user.id not in state["admin_ids"]: return txt = "قائمة المحظورين:\n" for uid in state["blocked"]: name = users.get(uid, {}).get("name", "مجهول") txt += f"{name} (ID: {uid})\n" update.message.reply_text(txt or "لا يوجد مستخدمون محظورون.")
-
-def cmd_usersfile(update: Update, context: CallbackContext): if update.effective_user.id not in state["admin_ids"]: return lines = [f"{u['name']} - ID: {uid}" for uid, u in users.items()] with open("users_list.txt", "w") as f: f.write("\n".join(lines)) update.message.reply_document(document=open("users_list.txt", "rb"))
-
-def cmd_setpassword(update: Update, context: CallbackContext): if update.effective_user.id not in state["admin_ids"]: return if context.args: state["password"] = context.args[0] save_state() update.message.reply_text("تم تغيير كلمة المرور.")
-
-def cmd_resetpassword(update: Update, context: CallbackContext): if update.effective_user.id not in state["admin_ids"]: return state["password"] = "" save_state() update.message.reply_text("تم مسح كلمة المرور.")
-
-Message handler
-
-def handle_message(update: Update, context: CallbackContext): uid = str(update.effective_user.id) if uid in state["blocked"]: update.message.reply_text("تم حظرك من استخدام البوت.") return if uid not in users: update.message.reply_text("يرجى استخدام /start أولاً.") return
-
-name = users[uid]["name"]
-message = update.message
-
-try:
-    if message.text:
-        bot.send_message(chat_id=os.environ.get("GROUP_ID"), text=f"{name}: {message.text}")
-    elif message.photo:
-        file = message.photo[-1].get_file()
-        bot.send_photo(chat_id=os.environ.get("GROUP_ID"), photo=file.file_id, caption=f"{name} أرسل صورة")
-    elif message.video:
-        file = message.video.get_file()
-        bot.send_video(chat_id=os.environ.get("GROUP_ID"), video=file.file_id, caption=f"{name} أرسل فيديو")
-    elif message.audio:
-        file = message.audio.get_file()
-        bot.send_audio(chat_id=os.environ.get("GROUP_ID"), audio=file.file_id, caption=f"{name} أرسل مقطع صوتي")
-    elif message.voice:
-        file = message.voice.get_file()
-        bot.send_voice(chat_id=os.environ.get("GROUP_ID"), voice=file.file_id, caption=f"{name} أرسل رسالة صوتية")
+@admin_only
+def cmd_setpassword(update: Update, context: CallbackContext):
+    if not context.args:
+        state["password"] = ""
+        save_state()
+        update.message.reply_text("✅ تم مسح كلمة المرور.")
     else:
-        update.message.reply_text("نوع الرسالة غير مدعوم.")
+        state["password"] = context.args[0]
+        save_state()
+        update.message.reply_text(f"✅ كلمة المرور أصبحت: {state['password']}")
+    # reset all users pwd_ok
+    for u in users_data.values():
+        u["pwd_ok"] = not bool(state["password"])
+        u["joined"] = u["pwd_ok"]
+    save_users()
+
+@admin_only
+def cmd_block(update: Update, context: CallbackContext):
+    if not context.args: 
+        update.message.reply_text("Usage: /block ALIAS")
         return
-    update.message.reply_text("تم إرسال رسالتك بنجاح.")
-except Exception as e:
-    logger.error(e)
-    update.message.reply_text("حدث خطأ أثناء إرسال رسالتك.")
+    target = context.args[0]
+    for uid, info in users_data.items():
+        if info["alias"] == target:
+            info["blocked"] = True
+            save_users()
+            update.message.reply_text(f"🚫 تم حظر {target}.")
+            try:
+                bot.send_message(int(uid), "🚫 لقد تم حظرك.")
+            except: pass
+            return
+    update.message.reply_text("❌ Alias غير موجود.")
 
-Dispatcher setup
+@admin_only
+def cmd_unblock(update: Update, context: CallbackContext):
+    if not context.args:
+        update.message.reply_text("Usage: /unblock ALIAS")
+        return
+    target = context.args[0]
+    for uid, info in users_data.items():
+        if info["alias"] == target:
+            info["blocked"] = False
+            save_users()
+            update.message.reply_text(f"✅ تم مسح الحظر عن {target}.")
+            try:
+                bot.send_message(int(uid), "✅ تم رفع الحظر عنك.")
+            except: pass
+            return
+    update.message.reply_text("❌ Alias غير موجود.")
 
-updater = Updater(TOKEN, use_context=True) dispatcher = updater.dispatcher
+@admin_only
+def cmd_blocked(update: Update, context: CallbackContext):
+    lines = [f"{info['alias']} ({uid})" for uid, info in users_data.items() if info["blocked"]]
+    update.message.reply_text("🚫 المحظورون:\n" + "\n".join(lines) if lines else "لا يوجد محظورون.")
 
-dispatcher.add_handler(CommandHandler("start", cmd_start)) dispatcher.add_handler(CommandHandler("help", cmd_help)) dispatcher.add_handler(CommandHandler("block", cmd_block)) dispatcher.add_handler(CommandHandler("unblock", cmd_unblock)) dispatcher.add_handler(CommandHandler("blocked", cmd_blocked)) dispatcher.add_handler(CommandHandler("usersfile", cmd_usersfile)) dispatcher.add_handler(CommandHandler("setpassword", cmd_setpassword)) dispatcher.add_handler(CommandHandler("resetpassword", cmd_resetpassword)) dispatcher.add_handler(MessageHandler(Filters.all, handle_message))
+@admin_only
+def cmd_usersfile(update: Update, context: CallbackContext):
+    lines = [f"{info['alias']} - {uid} - {'محظور' if info['blocked'] else 'مفعل'}"
+             for uid, info in users_data.items()]
+    content = "\n".join(lines)
+    filename = "users_list.txt"
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(content)
+    with open(filename, "rb") as f:
+        update.message.reply_document(f, filename=filename)
 
-Start bot
+# ─── Message & Media Handlers ───────────────────────────────────────────────
+def handle_text(update: Update, context: CallbackContext):
+    uid = str(update.effective_chat.id)
+    text = update.message.text or ""
+    if uid not in users_data:
+        cmd_start(update, context); return
+    user = users_data[uid]
+    if user["blocked"]:
+        update.message.reply_text("🚫 أنت محظور.")
+        return
+    if is_password_required() and not user["pwd_ok"]:
+        if text == state["password"]:
+            user["pwd_ok"] = True; user["joined"] = True; save_users()
+            update.message.reply_text("✅ تم التحقق.")
+        else:
+            update.message.reply_text("🔒 كلمة المرور خاطئة.")
+        return
+    if not user["joined"]:
+        user["joined"] = True; save_users()
+        update.message.reply_text(f"✅ {user['alias']}، يمكنك الآن الدردشة."); return
+    if not can_send(uid):
+        update.message.reply_text("⚠️ معدل الرسائل مرتفع."); return
+    alias=user["alias"]
+    broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[{alias}] {text}"))
 
-if name == 'main': if MODE == "webhook": updater.start_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN) updater.bot.set_webhook(url=f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}/{TOKEN}") else: updater.start_polling() updater.idle()
+def handle_media(update: Update, context: CallbackContext):
+    uid = str(update.effective_chat.id)
+    user = users_data.get(uid)
+    if not user or user["blocked"] or not user["joined"]: return
+    msg = update.message
+    fsize = 0
+    file_id = None
+    send_fn = None
+    caption = f"[{user['alias']}] أرسل وسائط:"
+    if msg.photo:
+        file_id = msg.photo[-1].file_id; fsize=msg.photo[-1].file_size; send_fn=context.bot.send_photo
+    elif msg.video:
+        file_id = msg.video.file_id; fsize=msg.video.file_size; send_fn=context.bot.send_video
+    elif msg.document:
+        file_id = msg.document.file_id; fsize=msg.document.file_size; send_fn=context.bot.send_document
+    elif msg.audio:
+        file_id = msg.audio.file_id; fsize=msg.audio.file_size; send_fn=context.bot.send_audio
+    else:
+        return
+    if fsize>MAX_FILE_SIZE:
+        update.message.reply_text("❌ الملف أكبر من المسموح.")
+        return
+    broadcast_to_others(uid, lambda cid: send_fn(cid, file_id, caption=caption))
 
+# ─── Register Handlers ──────────────────────────────────────────────────────
+dispatcher.add_handler(CommandHandler("start", cmd_start))
+dispatcher.add_handler(CommandHandler("setpassword", cmd_setpassword))
+dispatcher.add_handler(CommandHandler("block", cmd_block))
+dispatcher.add_handler(CommandHandler("unblock", cmd_unblock))
+dispatcher.add_handler(CommandHandler("blocked", cmd_blocked))
+dispatcher.add_handler(CommandHandler("usersfile", cmd_usersfile))
+dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
+dispatcher.add_handler(MessageHandler(Filters.photo|Filters.video|Filters.document|Filters.audio, handle_media))
+
+# ─── Run Bot ────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    if MODE == "webhook":
+        updater.start_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=TOKEN
+        )
+        updater.bot.set_webhook(f"{WEBHOOK_URL}/{TOKEN}")
+        logger.info("Started in Webhook mode.")
+    else:
+        updater.start_polling()
+        logger.info("Started in Polling mode.")
+    updater.idle()
