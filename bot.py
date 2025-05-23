@@ -81,6 +81,7 @@ def broadcast_to_others(sender_id, func):
         if uid != sender_id and info["joined"] and not info["blocked"]:
             try:
                 func(int(uid))
+                time.sleep(0.033)  # تأخير 33 مللي ثانية لاحترام حد 30 رسالة/ثانية
             except Exception as e:
                 logger.warning(f"فشل إرسال رسالة إلى {uid}: {e}")
 
