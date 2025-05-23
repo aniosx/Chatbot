@@ -275,8 +275,40 @@ def cmd_usersfile(update: Update, context: CallbackContext):
     with open(filename, "rb") as f:
         update.message.reply_document(f, filename=filename)
 
-# حذف /users واستبدالها فقط بـ /usersfile
-# /usersfile يعرض ملف نصي كامل للمستخدمين
+@admin_only
+def cmd_changepassword(update: Update, context: CallbackContext):
+    global ACCESS_PASSWORD
+    if not context.args:
+        # إزالة كلمة المرور
+        os.environ["ACCESS_PASSWORD"] = ""
+        ACCESS_PASSWORD = ""
+        for uid, info in users_data.items():
+            info["pwd_ok"] = True
+            info["joined"] = True
+            try:
+                bot.send_message(int(uid), "🔓 تم إزالة كلمة المرور. يمكنك الآن الدردشة بدون كلمة مرور.")
+            except:
+                pass
+        save_users()
+        update.message.reply_text("✅ تم إزالة كلمة المرور. الدردشة الآن بدون كلمة مرور.")
+        return
+
+    # تغيير كلمة المرور
+    new_password = " ".join(context.args).strip()
+    if not new_password:
+        update.message.reply_text("❌ يجب إدخال كلمة مرور جديدة أو ترك الأمر فارغًا لإزالة كلمة المرور.")
+        return
+    os.environ["ACCESS_PASSWORD"] = new_password
+    ACCESS_PASSWORD = new_password
+    for uid, info in users_data.items():
+        info["pwd_ok"] = False
+        info["joined"] = False
+        try:
+            bot.send_message(int(uid), "🔒 تم تغيير كلمة المرور. أرسل كلمة المرور الجديدة للانضمام.")
+        except:
+            pass
+    save_users()
+    update.message.reply_text(f"✅ تم تغيير كلمة المرور إلى: {new_password}")
 
 # ───── تسجيل الأوامر ──────────────────────────────────────
 dispatcher.add_handler(CommandHandler("start", cmd_start))
@@ -284,6 +316,7 @@ dispatcher.add_handler(CommandHandler("block", cmd_block))
 dispatcher.add_handler(CommandHandler("unblock", cmd_unblock))
 dispatcher.add_handler(CommandHandler("blocked", cmd_blocked))
 dispatcher.add_handler(CommandHandler("usersfile", cmd_usersfile))
+dispatcher.add_handler(CommandHandler("changepassword", cmd_changepassword))
 
 dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
 dispatcher.add_handler(MessageHandler(Filters.sticker, handle_sticker))
