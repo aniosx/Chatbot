@@ -26,6 +26,10 @@ PORT = int(os.getenv("PORT", "8443"))
 # ───── ملفات البيانات ───────────────────────────────
 USERS_FILE = "users.json"
 
+if not os.path.exists(USERS_FILE):
+    with open(USERS_FILE, "w", encoding="utf-8") as f:
+        json.dump({}, f, ensure_ascii=False, indent=2)
+
 if os.path.exists(USERS_FILE):
     with open(USERS_FILE, "r", encoding="utf-8") as f:
         users_data = json.load(f)
@@ -92,7 +96,7 @@ def cmd_start(update: Update, context: CallbackContext):
             "alias": generate_alias(),
             "blocked": False,
             "joined": False,
-            "pwd_ok": not is_password_required(),
+            "pwd_ok": not is_password_required() or int(uid) == OWNER_ID,
             "last_msgs": []
         }
         save_users()
@@ -110,7 +114,7 @@ def handle_text(update: Update, context: CallbackContext):
         update.message.reply_text("⚠️ تم حظرك، لا يمكنك إرسال الرسائل.")
         return
 
-    if is_password_required() and not user["pwd_ok"]:
+    if is_password_required() and not user["pwd_ok"] and int(uid) != OWNER_ID:
         if text.strip() == ACCESS_PASSWORD:
             user["pwd_ok"] = True
             user["joined"] = True
@@ -316,22 +320,11 @@ def cmd_changepassword(update: Update, context: CallbackContext):
     save_users()
     update.message.reply_text(f"✅ تم تغيير كلمة المرور إلى: {new_password}")
 
-# ───── تسجيل الأوامر ──────────────────────────────────────
-dispatcher.add_handler(CommandHandler("start", cmd_start))
-dispatcher.add_handler(CommandHandler("block", cmd_block))
-dispatcher.add_handler(CommandHandler("unblock", cmd_unblock))
-dispatcher.add_handler(CommandHandler("blocked", cmd_blocked))
-dispatcher.add_handler(CommandHandler("usersfile", cmd_usersfile))
-dispatcher.add_handler(CommandHandler("changepassword", cmd_changepassword))
-
-dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
-dispatcher.add_handler(MessageHandler(Filters.sticker, handle_sticker))
-dispatcher.add_handler(MessageHandler(Filters.photo, handle_photo))
-dispatcher.add_handler(MessageHandler(Filters.video, handle_video))
-dispatcher.add_handler(MessageHandler(Filters.audio, handle_audio))
-dispatcher.add_handler(MessageHandler(Filters.document, handle_document))
-
 # ───── Webhook support (flask app) ──────────────────────
+
+@app.route("/", methods=["GET"])
+def health_check():
+    return "Bot en ligne", 200
 
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook_handler():
@@ -346,12 +339,29 @@ def set_webhook():
         webhook_url = f"{WEBHOOK_URL}/{TOKEN}"
         bot.set_webhook(webhook_url)
         logger.info(f"Webhook set to {webhook_url}")
+        logger.info("Bot en ligne")
+        bot.send_message(OWNER_ID, "✅ Bot en ligne")
     else:
         logger.error("WEBHOOK_URL غير محدد في متغيرات البيئة.")
 
 def delete_webhook():
     bot.delete_webhook()
     logger.info("Webhook deleted.")
+
+# ───── تسجيل الأوامر ──────────────────────────────────────
+dispatcher.add_handler(CommandHandler("start", cmd_start))
+dispatcher.add_handler(CommandHandler("block", cmd_block))
+dispatcher.add_handler(CommandHandler("unblock", cmd_unblock))
+dispatcher.add_handler(CommandHandler("blocked", cmd_blocked))
+dispatcher.add_handler(CommandHandler("usersfile", cmd_usersfile))
+dispatcher.add_handler(CommandHandler("changepassword", cmd_changepassword))
+
+dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
+dispatcher.add_handler(MessageHandler(Filters.sticker, handle_sticker))
+dispatcher.add_handler(MessageHandler(Filters.photo, handle_photo))
+dispatcher.add_handler(MessageHandler(Filters.video, handle_video))
+dispatcher.add_handler(MessageHandler(Filters.audio, handle_audio))
+dispatcher.add_handler(MessageHandler(Filters.document, handle_document))
 
 # ───── Main ─────────────────────────────────────────────
 
