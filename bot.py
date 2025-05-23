@@ -1,328 +1,141 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
+import os import json import logging from uuid import uuid4 from flask import Flask, request from telegram import Update, InputFile from telegram.ext import (Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackContext)
 
-import os
-import json
-import random
-import time
-import logging
-from flask import Flask, request
-from telegram import Bot, Update
-from telegram.ext import Updater, Dispatcher, CommandHandler, MessageHandler, Filters, CallbackContext
+TOKEN = os.getenv("BOT_TOKEN") PORT = int(os.environ.get("PORT", 5000))
 
-# ───── إعدادات أساسية ────────────────────────────────
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+كلمة السر الابتدائية (من متغير البيئة)
 
-TOKEN = os.getenv("TELEGRAM_TOKEN")  # ضع توكن البوت في متغير البيئة TELEGRAM_TOKEN
-OWNER_ID = int(os.getenv("OWNER_ID", "0"))  # رقمك كمالك البوت (مشرف)
-ACCESS_PASSWORD = os.getenv("ACCESS_PASSWORD", "").strip()
-USE_WEBHOOK = os.getenv("USE_WEBHOOK", "False").lower() == "true"
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").rstrip("/")
-PORT = int(os.getenv("PORT", "8443"))
+INITIAL_PASSWORD = os.getenv("ACCESS_PASSWORD", "") ACCESS_PASSWORD = INITIAL_PASSWORD
 
-# ───── ملفات البيانات ───────────────────────────────
-USERS_FILE = "users.json"
+المسارات
 
-if os.path.exists(USERS_FILE):
-    with open(USERS_FILE, "r", encoding="utf-8") as f:
-        users_data = json.load(f)
+STATE_FILE = "state.json" USERS_FILE = "users.json" BLOCKED_FILE = "blocked_users.json"
+
+إعداد السجل
+
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO) logger = logging.getLogger(name)
+
+تهيئة Flask
+
+app = Flask(name)
+
+تهيئة البيانات
+
+state = {"authorized": [], "admin_id": None} users = {} blocked_users = []
+
+تحميل البيانات
+
+if os.path.exists(STATE_FILE): with open(STATE_FILE, "r") as f: state = json.load(f)
+
+if os.path.exists(USERS_FILE): with open(USERS_FILE, "r") as f: users = json.load(f)
+
+if os.path.exists(BLOCKED_FILE): with open(BLOCKED_FILE, "r") as f: blocked_users = json.load(f)
+
+def save_state(): with open(STATE_FILE, "w") as f: json.dump(state, f) with open(USERS_FILE, "w") as f: json.dump(users, f) with open(BLOCKED_FILE, "w") as f: json.dump(blocked_users, f)
+
+أمر /start
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE): user_id = str(update.effective_user.id) if user_id in blocked_users: await update.message.reply_text("لقد تم حظرك من استخدام هذا البوت.") return
+
+if ACCESS_PASSWORD and user_id not in state["authorized"]:
+    await update.message.reply_text("الرجاء إدخال كلمة المرور للولوج إلى البوت.")
+    return
+
+if user_id not in users:
+    random_id = str(uuid4())[:8]
+    users[user_id] = {"random_id": random_id}
+    save_state()
+
+await update.message.reply_text("مرحبًا بك! أرسل رسالة ليتم نشرها للمجموعة.")
+
+أمر /setpassword
+
+async def set_password(update: Update, context: ContextTypes.DEFAULT_TYPE): global ACCESS_PASSWORD user_id = str(update.effective_user.id) if user_id != str(state["admin_id"]): await update.message.reply_text("ليس لديك صلاحية تنفيذ هذا الأمر.") return
+
+if context.args:
+    ACCESS_PASSWORD = context.args[0]
+    await update.message.reply_text(f"تم تعيين كلمة المرور الجديدة: {ACCESS_PASSWORD}")
 else:
-    users_data = {}
+    ACCESS_PASSWORD = ""
+    await update.message.reply_text("تم حذف كلمة المرور بنجاح.")
 
-def save_users():
-    with open(USERS_FILE, "w", encoding="utf-8") as f:
-        json.dump(users_data, f, ensure_ascii=False, indent=2)
+أمر /usersfile
 
-def generate_alias():
-    return "".join(random.choices("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", k=4))
+async def users_file(update: Update, context: ContextTypes.DEFAULT_TYPE): user_id = str(update.effective_user.id) if user_id != str(state["admin_id"]): await update.message.reply_text("ليس لديك صلاحية.") return
 
-# ───── حدود الرسائل والملفات ─────────────────────────
-MAX_MESSAGES_PER_MINUTE = 5
-MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 ميغابايت
+text = "\n".join([f"{uid}: {data['random_id']}" for uid, data in users.items()])
+with open("all_users.txt", "w") as f:
+    f.write(text)
+await context.bot.send_document(chat_id=update.effective_chat.id, document=InputFile("all_users.txt"))
 
-message_timestamps = {}  # user_id -> [timestamps]
+أمر /blocked
 
-def can_send(user_id):
-    now = time.time()
-    times = message_timestamps.get(user_id, [])
-    times = [t for t in times if now - t < 60]
-    if len(times) >= MAX_MESSAGES_PER_MINUTE:
-        message_timestamps[user_id] = times
-        return False
-    times.append(now)
-    message_timestamps[user_id] = times
-    return True
+async def show_blocked(update: Update, context: ContextTypes.DEFAULT_TYPE): user_id = str(update.effective_user.id) if user_id != str(state["admin_id"]): await update.message.reply_text("ليس لديك صلاحية.") return if not blocked_users: await update.message.reply_text("لا يوجد مستخدمون محظورون.") return text = "\n".join([f"{uid}: {users.get(uid, {}).get('random_id', 'غير معروف')}" for uid in blocked_users]) await update.message.reply_text("المستخدمون المحظورون:\n" + text)
 
-# ───── إعداد البوت والفلاسك ───────────────────────────
-bot = Bot(token=TOKEN)
-updater = Updater(token=TOKEN, use_context=True)
-dispatcher: Dispatcher = updater.dispatcher
-app = Flask(__name__)
+أوامر الإدارة
 
-# ───── وظائف مساعدة ───────────────────────────────────
-def is_password_required():
-    return bool(ACCESS_PASSWORD)
+async def block(update: Update, context: ContextTypes.DEFAULT_TYPE): user_id = str(update.effective_user.id) if user_id != str(state["admin_id"]): await update.message.reply_text("ليس لديك صلاحية.") return if context.args: to_block = context.args[0] if to_block not in blocked_users: blocked_users.append(to_block) save_state() await update.message.reply_text("تم حظر المستخدم.") else: await update.message.reply_text("المستخدم محظور بالفعل.")
 
-def welcome_text(uid):
-    alias = users_data[uid]["alias"]
-    if is_password_required() and not users_data[uid]["pwd_ok"]:
-        return f"🔒 أرسل كلمة المرور للانضمام يا {alias}."
-    return f"🚀 مرحباً {alias}! يمكنك الآن الدردشة."
+async def unblock(update: Update, context: ContextTypes.DEFAULT_TYPE): user_id = str(update.effective_user.id) if user_id != str(state["admin_id"]): await update.message.reply_text("ليس لديك صلاحية.") return if context.args: to_unblock = context.args[0] if to_unblock in blocked_users: blocked_users.remove(to_unblock) save_state() await update.message.reply_text("تم مسح الحظر عن المستخدم.") else: await update.message.reply_text("المستخدم غير محظور.")
 
-def broadcast_to_others(sender_id, func):
-    for uid, info in users_data.items():
-        if uid != sender_id and info["joined"] and not info["blocked"]:
-            try:
-                func(int(uid))
-            except Exception as e:
-                logger.warning(f"فشل إرسال رسالة إلى {uid}: {e}")
+التعامل مع الرسائل
 
-def is_admin(user_id):
-    return user_id == OWNER_ID
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE): user_id = str(update.effective_user.id) if user_id in blocked_users: await update.message.reply_text("لا يمكنك إرسال رسائل، لقد تم حظرك.") return
 
-# ───── الأوامر الأساسية ───────────────────────────────
-
-def cmd_start(update: Update, context: CallbackContext):
-    uid = str(update.effective_chat.id)
-    if uid not in users_data:
-        users_data[uid] = {
-            "alias": generate_alias(),
-            "blocked": False,
-            "joined": False,
-            "pwd_ok": not is_password_required(),
-            "last_msgs": []
-        }
-        save_users()
-    update.message.reply_text(welcome_text(uid))
-
-def handle_text(update: Update, context: CallbackContext):
-    uid = str(update.effective_chat.id)
-    text = update.message.text or ""
-    if uid not in users_data:
-        cmd_start(update, context)
-        return
-    user = users_data[uid]
-
-    if user["blocked"]:
-        update.message.reply_text("⚠️ تم حظرك، لا يمكنك إرسال الرسائل.")
-        return
-
-    if is_password_required() and not user["pwd_ok"]:
-        if text.strip() == ACCESS_PASSWORD:
-            user["pwd_ok"] = True
-            user["joined"] = True
-            save_users()
-            update.message.reply_text("✅ تم قبول كلمة المرور. يمكنك الآن الدردشة.")
-        else:
-            update.message.reply_text("🔒 كلمة المرور خاطئة.")
-        return
-
-    if not user["joined"]:
-        user["joined"] = True
-        save_users()
-        update.message.reply_text(f"✅ {user['alias']}، يمكنك الآن الدردشة.")
-        return
-
-    if not can_send(uid):
-        update.message.reply_text("⚠️ تجاوزت 5 رسائل في الدقيقة. انتظر قليلاً.")
-        return
-
-    alias = user["alias"]
-    broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[{alias}] {text}"))
-
-def handle_sticker(update: Update, context: CallbackContext):
-    uid = str(update.effective_chat.id)
-    user = users_data.get(uid)
-    if not user or user["blocked"] or not user["joined"]:
-        return
-    sid = update.message.sticker.file_id
-    alias = user["alias"]
-    broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[{alias}] أرسل ستيكر:"))
-    broadcast_to_others(uid, lambda cid: context.bot.send_sticker(cid, sticker=sid))
-
-def handle_photo(update: Update, context: CallbackContext):
-    uid = str(update.effective_chat.id)
-    user = users_data.get(uid)
-    if not user or user["blocked"] or not user["joined"]:
-        return
-    photo = update.message.photo[-1]
-    if photo.file_size > MAX_FILE_SIZE:
-        update.message.reply_text("❌ الصورة أكبر من 50 ميغابايت.")
-        return
-    fid = photo.file_id
-    alias = user["alias"]
-    broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[{alias}] أرسل صورة:"))
-    broadcast_to_others(uid, lambda cid: context.bot.send_photo(cid, photo=fid))
-
-def handle_video(update: Update, context: CallbackContext):
-    uid = str(update.effective_chat.id)
-    user = users_data.get(uid)
-    if not user or user["blocked"] or not user["joined"]:
-        return
-    video = update.message.video
-    if video.file_size > MAX_FILE_SIZE:
-        update.message.reply_text("❌ الفيديو أكبر من 50 ميغابايت.")
-        return
-    vid = video.file_id
-    alias = user["alias"]
-    broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[{alias}] أرسل فيديو:"))
-    broadcast_to_others(uid, lambda cid: context.bot.send_video(cid, video=vid))
-
-def handle_audio(update: Update, context: CallbackContext):
-    uid = str(update.effective_chat.id)
-    user = users_data.get(uid)
-    if not user or user["blocked"] or not user["joined"]:
-        return
-    audio = update.message.audio
-    if audio.file_size > MAX_FILE_SIZE:
-        update.message.reply_text("❌ الملف الصوتي أكبر من 50 ميغابايت.")
-        return
-    aid = audio.file_id
-    alias = user["alias"]
-    broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[{alias}] أرسل ملف صوتي:"))
-    broadcast_to_others(uid, lambda cid: context.bot.send_audio(cid, audio=aid))
-
-def handle_document(update: Update, context: CallbackContext):
-    uid = str(update.effective_chat.id)
-    user = users_data.get(uid)
-    if not user or user["blocked"] or not user["joined"]:
-        return
-    doc = update.message.document
-    if doc.file_size > MAX_FILE_SIZE:
-        update.message.reply_text("❌ الملف أكبر من 50 ميغابايت.")
-        return
-    did = doc.file_id
-    alias = user["alias"]
-    broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[{alias}] أرسل ملف:"))
-    broadcast_to_others(uid, lambda cid: context.bot.send_document(cid, document=did))
-
-# ───── أوامر الإدارة ──────────────────────────────────────
-
-def admin_only(func):
-    def wrapper(update: Update, context: CallbackContext):
-        if not is_admin(update.effective_user.id):
-            update.message.reply_text("❌ أنت لست مشرفاً.")
-            return
-        return func(update, context)
-    return wrapper
-
-@admin_only
-def cmd_block(update: Update, context: CallbackContext):
-    if not context.args:
-        update.message.reply_text("Usage: /block ALIAS")
-        return
-    target = context.args[0]
-    for uid, info in users_data.items():
-        if info["alias"] == target:
-            if info["blocked"]:
-                update.message.reply_text(f"⚠️ {target} محظور بالفعل.")
-                return
-            info["blocked"] = True
-            save_users()
-            update.message.reply_text(f"🚫 تم حظر {target}.")
-            try:
-                bot.send_message(int(uid), "⚠️ تم حظرك من الدردشة من قبل المشرف.")
-            except:
-                pass
-            return
-    update.message.reply_text("❌ Alias غير موجود.")
-
-@admin_only
-def cmd_unblock(update: Update, context: CallbackContext):
-    if not context.args:
-        update.message.reply_text("Usage: /unblock ALIAS")
-        return
-    target = context.args[0]
-    for uid, info in users_data.items():
-        if info["alias"] == target:
-            if not info["blocked"]:
-                update.message.reply_text(f"⚠️ {target} ليس محظوراً.")
-                return
-            info["blocked"] = False
-            save_users()
-            update.message.reply_text(f"✅ تم مسح الحظر عن {target}.")
-            try:
-                bot.send_message(int(uid), "✅ تم رفع الحظر عنك ويمكنك الآن الدردشة.")
-            except:
-                pass
-            return
-    update.message.reply_text("❌ Alias غير موجود.")
-
-@admin_only
-def cmd_blocked(update: Update, context: CallbackContext):
-    blocked_users = [
-        f"{info['alias']} (ID: {uid})"
-        for uid, info in users_data.items() if info["blocked"]
-    ]
-    if not blocked_users:
-        update.message.reply_text("لا يوجد مستخدمون محظورون حالياً.")
-        return
-    update.message.reply_text("قائمة المستخدمين المحظورين:\n" + "\n".join(blocked_users))
-
-@admin_only
-def cmd_usersfile(update: Update, context: CallbackContext):
-    lines = []
-    for uid, info in users_data.items():
-        status = "🚫 محظور" if info["blocked"] else "✅ مفعل"
-        lines.append(f"{info['alias']} (ID: {uid}) - {status}")
-    content = "\n".join(lines)
-    filename = "users_list.txt"
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write(content)
-    with open(filename, "rb") as f:
-        update.message.reply_document(f, filename=filename)
-
-# حذف /users واستبدالها فقط بـ /usersfile
-# /usersfile يعرض ملف نصي كامل للمستخدمين
-
-# ───── تسجيل الأوامر ──────────────────────────────────────
-dispatcher.add_handler(CommandHandler("start", cmd_start))
-dispatcher.add_handler(CommandHandler("block", cmd_block))
-dispatcher.add_handler(CommandHandler("unblock", cmd_unblock))
-dispatcher.add_handler(CommandHandler("blocked", cmd_blocked))
-dispatcher.add_handler(CommandHandler("usersfile", cmd_usersfile))
-
-dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
-dispatcher.add_handler(MessageHandler(Filters.sticker, handle_sticker))
-dispatcher.add_handler(MessageHandler(Filters.photo, handle_photo))
-dispatcher.add_handler(MessageHandler(Filters.video, handle_video))
-dispatcher.add_handler(MessageHandler(Filters.audio, handle_audio))
-dispatcher.add_handler(MessageHandler(Filters.document, handle_document))
-
-# ───── Webhook support (flask app) ──────────────────────
-
-@app.route(f"/{TOKEN}", methods=["POST"])
-def webhook_handler():
-    if request.method == "POST":
-        update = Update.de_json(request.get_json(force=True), bot)
-        dispatcher.process_update(update)
-        return "ok", 200
-    return "Method Not Allowed", 405
-
-def set_webhook():
-    if WEBHOOK_URL:
-        webhook_url = f"{WEBHOOK_URL}/{TOKEN}"
-        bot.set_webhook(webhook_url)
-        logger.info(f"Webhook set to {webhook_url}")
+if ACCESS_PASSWORD and user_id not in state["authorized"]:
+    text = update.message.text
+    if text == ACCESS_PASSWORD:
+        state["authorized"].append(user_id)
+        save_state()
+        await update.message.reply_text("تم الدخول بنجاح.")
     else:
-        logger.error("WEBHOOK_URL غير محدد في متغيرات البيئة.")
+        await update.message.reply_text("كلمة مرور خاطئة.")
+    return
 
-def delete_webhook():
-    bot.delete_webhook()
-    logger.info("Webhook deleted.")
+if user_id not in users:
+    random_id = str(uuid4())[:8]
+    users[user_id] = {"random_id": random_id}
+    save_state()
 
-# ───── Main ─────────────────────────────────────────────
+sender_id = users[user_id]["random_id"]
+caption = f"رسالة من مستخدم {sender_id}"
 
-if __name__ == "__main__":
-    if USE_WEBHOOK:
-        set_webhook()
-        logger.info(f"Starting Flask server on port {PORT}...")
-        app.run(host="0.0.0.0", port=PORT)
-    else:
-        delete_webhook()
-        logger.info("Starting polling...")
-        updater.start_polling()
-        updater.idle()
+# إعادة توجيه حسب نوع الرسالة
+if update.message.text:
+    await context.bot.send_message(chat_id=state["admin_id"], text=f"{caption}:\n{update.message.text}")
+elif update.message.photo:
+    await context.bot.send_photo(chat_id=state["admin_id"], photo=update.message.photo[-1].file_id, caption=caption)
+elif update.message.document:
+    await context.bot.send_document(chat_id=state["admin_id"], document=update.message.document.file_id, caption=caption)
+elif update.message.video:
+    await context.bot.send_video(chat_id=state["admin_id"], video=update.message.video.file_id, caption=caption)
+elif update.message.voice:
+    await context.bot.send_voice(chat_id=state["admin_id"], voice=update.message.voice.file_id, caption=caption)
+else:
+    await update.message.reply_text("نوع الرسالة غير مدعوم.")
+
+تهيئة التطبيق
+
+async def main(): application = Application.builder().token(TOKEN).build()
+
+# تسجيل المعالجين
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("setpassword", set_password))
+application.add_handler(CommandHandler("blocked", show_blocked))
+application.add_handler(CommandHandler("usersfile", users_file))
+application.add_handler(CommandHandler("block", block))
+application.add_handler(CommandHandler("unblock", unblock))
+application.add_handler(MessageHandler(filters.ALL, handle_message))
+
+# تشغيل polling أو webhook
+if os.getenv("USE_POLLING") == "true":
+    await application.run_polling()
+else:
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=TOKEN,
+        webhook_url=f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/{TOKEN}"
+    )
+
+if name == "main": import asyncio asyncio.run(main())
+
