@@ -297,4 +297,4 @@ dispatcher.add_handler(CommandHandler("start", cmd_start))
 dispatcher.add_handler(CommandHandler("block", cmd_block))
 dispatcher.add_handler(CommandHandler("unblock", cmd_unblock))
 dispatcher.add_handler(CommandHandler("usersfile", cmd_usersfile))
-dispatcher.add_handler(CommandHandler("setpassword", cmd_set
+dispatcher.add_handler(CommandHandler("setpassword", cmd_set))
