@@ -285,10 +285,11 @@ def cmd_changepassword(update: Update, context: CallbackContext):
         for uid, info in users_data.items():
             info["pwd_ok"] = True
             info["joined"] = True
-            try:
-                bot.send_message(int(uid), "🔓 تم إزالة كلمة المرور. يمكنك الآن الدردشة بدون كلمة مرور.")
-            except:
-                pass
+            if int(uid) != OWNER_ID:  # استثناء المشرف من الإشعار
+                try:
+                    bot.send_message(int(uid), "🔓 تم إزالة كلمة المرور. يمكنك الآن الدردشة بدون كلمة مرور.")
+                except:
+                    pass
         save_users()
         update.message.reply_text("✅ تم إزالة كلمة المرور. الدردشة الآن بدون كلمة مرور.")
         return
@@ -301,12 +302,17 @@ def cmd_changepassword(update: Update, context: CallbackContext):
     os.environ["ACCESS_PASSWORD"] = new_password
     ACCESS_PASSWORD = new_password
     for uid, info in users_data.items():
-        info["pwd_ok"] = False
-        info["joined"] = False
-        try:
-            bot.send_message(int(uid), "🔒 تم تغيير كلمة المرور. أرسل كلمة المرور الجديدة للانضمام.")
-        except:
-            pass
+        if int(uid) != OWNER_ID:  # استثناء المشرف من إعادة تعيين الحالة
+            info["pwd_ok"] = False
+            info["joined"] = False
+            try:
+                bot.send_message(int(uid), "🔒 تم تغيير كلمة المرور. أرسل كلمة المرور الجديدة للانضمام.")
+            except:
+                pass
+        else:
+            # التأكد من أن المشرف يبقى نشطًا
+            info["pwd_ok"] = True
+            info["joined"] = True
     save_users()
     update.message.reply_text(f"✅ تم تغيير كلمة المرور إلى: {new_password}")
 
