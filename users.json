@@ -1,19 +1,2 @@
 
-{
-  "144262846": {
-    "alias": "FJUJ",
-    "blocked": false,
-    "joined": true,
-    "pwd_ok": true,
-    "last_msgs": [],
-    "first_message_sent": false
-  },
-  "6217069981": {
-    "alias": "1KGR",
-    "blocked": false,
-    "joined": true,
-    "pwd_ok": true,
-    "last_msgs": [],
-    "first_message_sent": false
-  }
-}
+{ }
