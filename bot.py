@@ -12,7 +12,7 @@ from telegram.ext import Updater, Dispatcher, CommandHandler, MessageHandler, Fi
 
 # ───── إعدادات أساسية ────────────────────────────────
 logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(levelname)s - %(message)s", level=logging.DEBUG  # DEBUG للتصحيح
 )
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").rstrip("/")
 PORT = int(os.getenv("PORT", "8443"))
 
 # ───── ملفات البيانات ───────────────────────────────
-USERS_FILE = "users.json"
+USERS_FILE = "/data/users.json" if os.path.exists("/data") else "users.json"  # دعم Render Disks
 
 if not os.path.exists(USERS_FILE):
     with open(USERS_FILE, "w", encoding="utf-8") as f:
@@ -89,7 +89,6 @@ def is_admin(user_id):
     return user_id == OWNER_ID
 
 # ───── الأوامر الأساسية ───────────────────────────────
-
 def cmd_start(update: Update, context: CallbackContext):
     uid = str(update.effective_chat.id)
     if uid not in users_data:
@@ -101,7 +100,11 @@ def cmd_start(update: Update, context: CallbackContext):
             "last_msgs": []
         }
         save_users()
-    update.message.reply_text(welcome_text(uid))
+    user = users_data[uid]
+    if user["joined"] and user["pwd_ok"]:
+        update.message.reply_text(f"🚀 مرحبًا مجددًا {user['alias']}! أنت بالفعل في الدردشة.")
+    else:
+        update.message.reply_text(welcome_text(uid))
 
 def handle_text(update: Update, context: CallbackContext):
     uid = str(update.effective_chat.id)
@@ -205,7 +208,6 @@ def handle_document(update: Update, context: CallbackContext):
     broadcast_to_others(uid, lambda cid: context.bot.send_document(cid, document=did))
 
 # ───── أوامر الإدارة ──────────────────────────────────────
-
 def admin_only(func):
     def wrapper(update: Update, context: CallbackContext):
         if not is_admin(update.effective_user.id):
@@ -322,7 +324,6 @@ def cmd_changepassword(update: Update, context: CallbackContext):
     update.message.reply_text(f"✅ تم تغيير كلمة المرور إلى: {new_password}")
 
 # ───── Webhook support (flask app) ──────────────────────
-
 @app.route("/", methods=["GET"])
 def health_check():
     return "Bot en ligne", 200
@@ -365,12 +366,11 @@ dispatcher.add_handler(MessageHandler(Filters.audio, handle_audio))
 dispatcher.add_handler(MessageHandler(Filters.document, handle_document))
 
 # ───── Main ─────────────────────────────────────────────
-
 if __name__ == "__main__":
     if USE_WEBHOOK:
         set_webhook()
-        logger.info(f"Starting Flask server on port {PORT}...")
-        app.run(host="0.0.0.0", port=PORT)
+        logger.info("Starting Flask server for DEVELOPMENT ONLY...")
+        app.run(host="0.0.0.0", port=PORT, debug=False)  # debug=False لتجنب أخطاء التطوير
     else:
         delete_webhook()
         logger.info("Starting polling...")
