@@ -52,12 +52,17 @@ else:
 
 def save_users():
     logger.debug(f"Saving users to {USERS_FILE}")
-    try:
-        with open(USERS_FILE, "w", encoding="utf-8") as f:
-            json.dump(users_data, f, ensure_ascii=False, indent=2)
-        logger.debug("Users saved successfully")
-    except Exception as e:
-        logger.error(f"Failed to save users: {e}", exc_info=True)
+    for attempt in range(3):  # محاولة الحفظ 3 مرات
+        try:
+            with open(USERS_FILE, "w", encoding="utf-8") as f:
+                json.dump(users_data, f, ensure_ascii=False, indent=2)
+            logger.debug("Users saved successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Attempt {attempt + 1} failed to save users: {e}", exc_info=True)
+            time.sleep(0.5)  # تأخير قصير قبل المحاولة التالية
+    logger.error("All attempts to save users failed")
+    return False
 
 def generate_alias():
     return "".join(random.choices("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", k=4))
@@ -188,8 +193,11 @@ def handle_text(update: Update, context: CallbackContext):
     
     if is_first_message:
         logger.debug(f"First message detected for user {uid}")
-        user["first_message_sent"] = True
-        save_users()
+        user["first_message_sent"] = True  # تحديث في الذاكرة أولاً
+        if save_users():
+            logger.debug(f"Successfully updated first_message_sent for user {uid}")
+        else:
+            logger.warning(f"Failed to save first_message_sent for user {uid}, but updated in memory")
         if success:
             update.message.reply_text("✅ رسالتك الأولى وصلت إلى المستخدمين الآخرين!")
         else:
@@ -337,6 +345,17 @@ def cmd_usersfile(update: Update, context: CallbackContext):
         update.message.reply_document(f, filename=filename)
 
 @admin_only
+def cmd_updateusers(update: Update, context: CallbackContext):
+    if save_users():
+        try:
+            with open(USERS_FILE, "rb") as f:
+                update.message.reply_document(f, filename=USERS_FILE, caption="✅ تم حفظ users.json. قم بتحديث المستودع بهذا الملف.")
+        except Exception as e:
+            update.message.reply_text(f"❌ فشل إرسال users.json: {e}")
+    else:
+        update.message.reply_text("❌ فشل حفظ users.json. تحقق من السجلات.")
+
+@admin_only
 def cmd_changepassword(update: Update, context: CallbackContext):
     global ACCESS_PASSWORD
     if not context.args:
@@ -407,6 +426,7 @@ dispatcher.add_handler(CommandHandler("block", cmd_block))
 dispatcher.add_handler(CommandHandler("unblock", cmd_unblock))
 dispatcher.add_handler(CommandHandler("blocked", cmd_blocked))
 dispatcher.add_handler(CommandHandler("usersfile", cmd_usersfile))
+dispatcher.add_handler(CommandHandler("updateusers", cmd_updateusers))
 dispatcher.add_handler(CommandHandler("changepassword", cmd_changepassword))
 
 dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
