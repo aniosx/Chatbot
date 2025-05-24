@@ -24,7 +24,7 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").rstrip("/")
 PORT = int(os.getenv("PORT", "8443"))
 
 # ───── بيانات المستخدمين في الذاكرة ─────────────────
-# تهيئة users_data في الذاكرة مع إدخال المشرف
+# تهيئة users_data كمتغير عالمي ثابت
 users_data = {
     "144262846": {
         "alias": "FJUJ",
@@ -37,8 +37,8 @@ users_data = {
 logger.debug(f"Initialized users_data with {len(users_data)} entries")
 
 def save_users():
-    # لا حاجة لحفظ على القرص، البيانات تبقى في الذاكرة
-    logger.debug("Users data is stored in memory, no disk save required")
+    # لا حاجة لحفظ على القرص، البيانات في الذاكرة
+    logger.debug(f"Users data preserved in memory, current count: {len(users_data)}")
     return True
 
 def generate_alias():
@@ -95,10 +95,11 @@ def is_admin(user_id):
 # ───── الأوامر الأساسية ───────────────────────────────
 def cmd_start(update: Update, context: CallbackContext):
     uid = str(update.effective_chat.id)
-    logger.debug(f"Processing /start for user {uid}")
+    logger.debug(f"Processing /start for user {uid}, current users: {len(users_data)}")
     is_new_user = uid not in users_data
+    logger.debug(f"Is user {uid} new? {is_new_user}")
     if is_new_user:
-        logger.debug(f"New user {uid}, generating alias")
+        logger.debug(f"Adding new user {uid}, generating alias")
         users_data[uid] = {
             "alias": generate_alias(),
             "blocked": False,
@@ -117,9 +118,12 @@ def cmd_start(update: Update, context: CallbackContext):
                 f"الاسم: {user_info.first_name or 'غير متوفر'}\n"
                 f"اسم المستخدم: @{user_info.username or 'غير متوفر'}"
             )
+            logger.debug(f"Sent new user notification for {uid}")
         except Exception as e:
             logger.error(f"Failed to notify admin about new user {uid}: {e}")
         save_users()
+    else:
+        logger.debug(f"User {uid} already exists: {users_data[uid]}")
     user = users_data[uid]
     logger.debug(f"User {uid} status: joined={user['joined']}, pwd_ok={user['pwd_ok']}")
     if user["joined"] and user["pwd_ok"]:
@@ -134,7 +138,9 @@ def cmd_start(update: Update, context: CallbackContext):
 def handle_text(update: Update, context: CallbackContext):
     uid = str(update.effective_chat.id)
     text = update.message.text or ""
+    logger.debug(f"Handling text from user {uid}")
     if uid not in users_data:
+        logger.debug(f"User {uid} not found, triggering /start")
         cmd_start(update, context)
         return
     user = users_data[uid]
@@ -309,6 +315,7 @@ def cmd_usersfile(update: Update, context: CallbackContext):
         f.write(content)
     with open(filename, "rb") as f:
         update.message.reply_document(f, filename=filename, caption="📋 قائمة المستخدمين في الذاكرة")
+    logger.debug(f"Sent users list to admin, total users: {len(users_data)}")
 
 @admin_only
 def cmd_changepassword(update: Update, context: CallbackContext):
@@ -351,7 +358,7 @@ def cmd_changepassword(update: Update, context: CallbackContext):
 # ───── Webhook support ──────────────────────
 @app.route("/", methods=["GET"])
 def health_check():
-    return "Bot en ligne", 200
+    return "Bot is running", 200
 
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook_handler():
@@ -366,10 +373,10 @@ def set_webhook():
         webhook_url = f"{WEBHOOK_URL}/{TOKEN}"
         bot.set_webhook(webhook_url)
         logger.info(f"Webhook set to {webhook_url}")
-        logger.info("Bot en ligne")
-        bot.send_message(OWNER_ID, "✅ Bot en ligne")
+        logger.info("Bot is running")
+        bot.send_message(OWNER_ID, "✅ Bot is running")
     else:
-        logger.error("WEBHOOK_URL غير محدد في متغيرات البيئة.")
+        logger.error("WEBHOOK_URL is not set in environment variables.")
 
 def delete_webhook():
     bot.delete_webhook()
@@ -394,7 +401,8 @@ dispatcher.add_handler(MessageHandler(Filters.document, handle_document))
 if __name__ == "__main__":
     if USE_WEBHOOK:
         set_webhook()
-        logger.info("Starting Flask server...")
+        logger.info("Starting server with Gunicorn (local fallback to Flask)...")
+        # للاختبار المحلي فقط، استخدام Flask
         app.run(host="0.0.0.0", port=PORT, debug=False)
     else:
         delete_webhook()
