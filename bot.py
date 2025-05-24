@@ -16,20 +16,25 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-TOKEN = os.getenv("TELEGRAM_TOKEN")  # ضع توكن البوت في متغير البيئة TELEGRAM_TOKEN
-OWNER_ID = int(os.getenv("OWNER_ID", "0"))  # رقمك كمالك البوت (مشرف)
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 ACCESS_PASSWORD = os.getenv("ACCESS_PASSWORD", "").strip()
 USE_WEBHOOK = os.getenv("USE_WEBHOOK", "False").lower() == "true"
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").rstrip("/")
 PORT = int(os.getenv("PORT", "8443"))
 
 # ───── ملفات البيانات ───────────────────────────────
-USERS_FILE = "/data/users.json"  # استخدام القرص الدائم في Render
+USERS_FILE = "users.json"
 
 if not os.path.exists(USERS_FILE):
     logger.debug(f"Creating new users file at {USERS_FILE}")
-    with open(USERS_FILE, "w", encoding="utf-8") as f:
-        json.dump({}, f, ensure_ascii=False, indent=2)
+    try:
+        with open(USERS_FILE, "w", encoding="utf-8") as f:
+            json.dump({}, f, ensure_ascii=False, indent=2)
+        logger.debug("Users file created successfully")
+    except Exception as e:
+        logger.error(f"Failed to create users file: {e}")
+        raise
 
 if os.path.exists(USERS_FILE):
     logger.debug(f"Loading users from {USERS_FILE}")
@@ -89,13 +94,16 @@ def welcome_text(uid):
     return f"🚀 مرحباً {alias}! يمكنك الآن الدردشة."
 
 def broadcast_to_others(sender_id, func):
+    success = False
     for uid, info in users_data.items():
         if uid != sender_id and info["joined"] and not info["blocked"]:
             try:
                 func(int(uid))
-                time.sleep(0.033)  # تأخير 33 مللي ثانية لاحترام حد 30 رسالة/ثانية
+                success = True
+                time.sleep(0.033)  # تأخير 33 مللي ثانية
             except Exception as e:
                 logger.warning(f"فشل إرسال رسالة إلى {uid}: {e}")
+    return success
 
 def is_admin(user_id):
     return user_id == OWNER_ID
@@ -104,15 +112,30 @@ def is_admin(user_id):
 def cmd_start(update: Update, context: CallbackContext):
     uid = str(update.effective_chat.id)
     logger.debug(f"Processing /start for user {uid}")
-    if uid not in users_data:
+    is_new_user = uid not in users_data
+    if is_new_user:
         logger.debug(f"New user {uid}, generating alias")
         users_data[uid] = {
             "alias": generate_alias(),
             "blocked": False,
             "joined": False,
             "pwd_ok": not is_password_required() or int(uid) == OWNER_ID,
-            "last_msgs": []
+            "last_msgs": [],
+            "first_message_sent": False
         }
+        # إخطار المشرف بالمستخدم الجديد
+        try:
+            user_info = update.effective_user
+            bot.send_message(
+                OWNER_ID,
+                f"🆕 مستخدم جديد انضم!\n"
+                f"المعرف: {users_data[uid]['alias']}\n"
+                f"ID: {uid}\n"
+                f"الاسم: {user_info.first_name or 'غير متوفر'}\n"
+                f"اسم المستخدم: @{user_info.username or 'غير متوفر'}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to notify admin about new user {uid}: {e}")
         save_users()
     user = users_data[uid]
     logger.debug(f"User {uid} status: joined={user['joined']}, pwd_ok={user['pwd_ok']}")
@@ -158,7 +181,16 @@ def handle_text(update: Update, context: CallbackContext):
         return
 
     alias = user["alias"]
-    broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[{alias}] {text}"))
+    is_first_message = not user["first_message_sent"]
+    success = broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[{alias}] {text}"))
+    
+    if is_first_message:
+        user["first_message_sent"] = True
+        save_users()
+        if success:
+            update.message.reply_text("✅ رسالتك الأولى وصلت إلى المستخدمين الآخرين!")
+        else:
+            update.message.reply_text("❌ فشل إرسال رسالتك الأولى. حاول مرة أخرى لاحقًا.")
 
 def handle_sticker(update: Update, context: CallbackContext):
     uid = str(update.effective_chat.id)
@@ -305,13 +337,12 @@ def cmd_usersfile(update: Update, context: CallbackContext):
 def cmd_changepassword(update: Update, context: CallbackContext):
     global ACCESS_PASSWORD
     if not context.args:
-        # إزالة كلمة المرور
         os.environ["ACCESS_PASSWORD"] = ""
         ACCESS_PASSWORD = ""
         for uid, info in users_data.items():
             info["pwd_ok"] = True
             info["joined"] = True
-            if int(uid) != OWNER_ID:  # استثناء المشرف من الإشعار
+            if int(uid) != OWNER_ID:
                 try:
                     bot.send_message(int(uid), "🔓 تم إزالة كلمة المرور. يمكنك الآن الدردشة بدون كلمة مرور.")
                 except:
@@ -320,7 +351,6 @@ def cmd_changepassword(update: Update, context: CallbackContext):
         update.message.reply_text("✅ تم إزالة كلمة المرور. الدردشة الآن بدون كلمة مرور.")
         return
 
-    # تغيير كلمة المرور
     new_password = " ".join(context.args).strip()
     if not new_password:
         update.message.reply_text("❌ يجب إدخال كلمة مرور جديدة أو ترك الأمر فارغًا لإزالة كلمة المرور.")
@@ -328,7 +358,7 @@ def cmd_changepassword(update: Update, context: CallbackContext):
     os.environ["ACCESS_PASSWORD"] = new_password
     ACCESS_PASSWORD = new_password
     for uid, info in users_data.items():
-        if int(uid) != OWNER_ID:  # استثناء المشرف من إعادة تعيين الحالة
+        if int(uid) != OWNER_ID:
             info["pwd_ok"] = False
             info["joined"] = False
             try:
@@ -336,13 +366,12 @@ def cmd_changepassword(update: Update, context: CallbackContext):
             except:
                 pass
         else:
-            # التأكد من أن المشرف يبقى نشطًا
             info["pwd_ok"] = True
             info["joined"] = True
     save_users()
     update.message.reply_text(f"✅ تم تغيير كلمة المرور إلى: {new_password}")
 
-# ───── Webhook support (flask app) ──────────────────────
+# ───── Webhook support ──────────────────────
 @app.route("/", methods=["GET"])
 def health_check():
     return "Bot en ligne", 200
@@ -388,8 +417,8 @@ dispatcher.add_handler(MessageHandler(Filters.document, handle_document))
 if __name__ == "__main__":
     if USE_WEBHOOK:
         set_webhook()
-        logger.info("Starting Flask server for DEVELOPMENT ONLY...")
-        app.run(host="0.0.0.0", port=PORT, debug=False)  # debug=False لتجنب أخطاء التطوير
+        logger.info("Starting Flask server...")
+        app.run(host="0.0.0.0", port=PORT, debug=False)
     else:
         delete_webhook()
         logger.info("Starting polling...")
