@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 
 import os
-import json
 import random
 import time
 import logging
 from flask import Flask, request
 from telegram import Bot, Update
 from telegram.ext import Updater, Dispatcher, CommandHandler, MessageHandler, Filters, CallbackContext
+from users_storage import users_data, save_users
 
 # ───── إعدادات أساسية ────────────────────────────────
 logging.basicConfig(
@@ -23,24 +23,7 @@ USE_WEBHOOK = os.getenv("USE_WEBHOOK", "False").lower() == "true"
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").rstrip("/")
 PORT = int(os.getenv("PORT", "8443"))
 
-# ───── بيانات المستخدمين في الذاكرة ─────────────────
-# تهيئة users_data كمتغير عالمي ثابت
-users_data = {
-    "144262846": {
-        "alias": "FJUJ",
-        "blocked": False,
-        "joined": True,
-        "pwd_ok": True,
-        "last_msgs": []
-    }
-}
-logger.debug(f"Initialized users_data with {len(users_data)} entries")
-
-def save_users():
-    # لا حاجة لحفظ على القرص، البيانات في الذاكرة
-    logger.debug(f"Users data preserved in memory, current count: {len(users_data)}")
-    return True
-
+# ───── وظائف مساعدة لتخزين المستخدمين ────────────────
 def generate_alias():
     return "".join(random.choices("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", k=4))
 
@@ -318,6 +301,12 @@ def cmd_usersfile(update: Update, context: CallbackContext):
     logger.debug(f"Sent users list to admin, total users: {len(users_data)}")
 
 @admin_only
+def cmd_userscount(update: Update, context: CallbackContext):
+    count = len(users_data)
+    update.message.reply_text(f"📊 عدد المستخدمين في الذاكرة: {count}")
+    logger.debug(f"Reported users count to admin: {count}")
+
+@admin_only
 def cmd_changepassword(update: Update, context: CallbackContext):
     global ACCESS_PASSWORD
     if not context.args:
@@ -388,6 +377,7 @@ dispatcher.add_handler(CommandHandler("block", cmd_block))
 dispatcher.add_handler(CommandHandler("unblock", cmd_unblock))
 dispatcher.add_handler(CommandHandler("blocked", cmd_blocked))
 dispatcher.add_handler(CommandHandler("usersfile", cmd_usersfile))
+dispatcher.add_handler(CommandHandler("userscount", cmd_userscount))
 dispatcher.add_handler(CommandHandler("changepassword", cmd_changepassword))
 
 dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
