@@ -263,7 +263,7 @@ def cmd_usersfile(update: Update, context: CallbackContext):
         status = "🚫 محظور" if info["blocked"] else "✅ مفعل"
         lines.append(f"{info['alias']} (ID: {uid}) - {status}")
     content = "\n".join(lines)
-    filename = "users_list.txt"
+    filename = "/app/data/users_list.txt"
     with open(filename, "w", encoding="utf-8") as f:
         f.write(content)
     with open(filename, "rb") as f:
