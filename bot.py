@@ -21,18 +21,18 @@ logger = logging.getLogger(__name__)
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
-USE_WEBHOOK = os.getenv("USE_WEBHOOK", "False").lower() == "true"
+USE_WEBHOOK = os.getenv("USE_WEBHOOK", "True").lower() == "true"  # الافتراضي Webhook
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").rstrip("/")
-PORT = int(os.getenv("PORT", "8443"))
+PORT = int(os.getenv("PORT", "443"))  # تغيير المنفذ إلى 443 لـ Render
 ACTIVE_USERS_FILE = "active_users.json"  # ملف لتخزين المستخدمين النشطين
 
 # ───── حدود الرسائل والملفات ─────────────────────────
 MAX_MESSAGES_PER_MINUTE = 5  # لكل مستخدم
-MAX_BROADCAST_MESSAGES_PER_SECOND = 30  # إجمالي الرسائل المرسلة بين المستخدمين
+MAX_BROADCAST_MESSAGES_PER_SECOND = 30  # إجمالي الرسائل المرسلة
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 ميجابايت
 
 message_timestamps = {}  # user_id -> [timestamps] لحد الرسائل الفردية
-broadcast_timestamps = deque()  # لحد الرسائل المرسلة بين المستخدمين
+broadcast_timestamps = deque()  # لحد الرسائل المرسلة
 active_users = set([OWNER_ID])  # تخزين مؤقت للمستخدمين النشطين
 blocked_users = set()  # المستخدمون المحظورون
 user_aliases = {}  # user_id -> alias لتخزين الأسماء المستعارة
@@ -49,10 +49,11 @@ def load_active_users():
                 active_users.update(active_ids)
                 logger.info(f"Loaded active users: {active_users}")
     except FileNotFoundError:
-        logger.info("No active users file found, starting with OWNER_ID only")
-        active_users.add(OWNER_ID)
+        logger.info("No active users file found, initializing with OWNER_ID")
+        active_users = set([OWNER_ID])
     except Exception as e:
         logger.error(f"Error loading active users: {e}")
+        active_users = set([OWNER_ID])
 
 def save_active_users():
     """حفظ قائمة المستخدمين النشطين إلى ملف JSON"""
@@ -142,7 +143,7 @@ app = Flask(__name__)
 # ───── الأوامر الأساسية ───────────────────────────────
 def cmd_start(update: Update, context: CallbackContext):
     uid = update.effective_chat.id
-    logger.debug(f"Start command received from user {uid}")
+    logger.info(f"Start command received from user {uid}")
     if uid in blocked_users:
         update.message.reply_text("⚠️ أنت محظور ولا يمكنك استخدام البوت.")
         return
@@ -153,7 +154,7 @@ def cmd_start(update: Update, context: CallbackContext):
 
 def handle_text(update: Update, context: CallbackContext):
     uid = update.effective_chat.id
-    logger.debug(f"Text message received from user {uid}: {update.message.text}")
+    logger.info(f"Text message received from user {uid}: {update.message.text}")
     if uid in blocked_users:
         update.message.reply_text("⚠️ أنت محظور ولا يمكنك إرسال الرسائل.")
         return
@@ -176,7 +177,7 @@ def handle_text(update: Update, context: CallbackContext):
 
 def handle_sticker(update: Update, context: CallbackContext):
     uid = update.effective_chat.id
-    logger.debug(f"Sticker received from user {uid}")
+    logger.info(f"Sticker received from user {uid}")
     if uid in blocked_users:
         update.message.reply_text("⚠️ أنت محظور ولا يمكنك إرسال الرسائل.")
         return
@@ -200,7 +201,7 @@ def handle_sticker(update: Update, context: CallbackContext):
 
 def handle_photo(update: Update, context: CallbackContext):
     uid = update.effective_chat.id
-    logger.debug(f"Photo received from user {uid}")
+    logger.info(f"Photo received from user {uid}")
     if uid in blocked_users:
         update.message.reply_text("⚠️ أنت محظور ولا يمكنك إرسال الرسائل.")
         return
@@ -228,7 +229,7 @@ def handle_photo(update: Update, context: CallbackContext):
 
 def handle_video(update: Update, context: CallbackContext):
     uid = update.effective_chat.id
-    logger.debug(f"Video received from user {uid}")
+    logger.info(f"Video received from user {uid}")
     if uid in blocked_users:
         update.message.reply_text("⚠️ أنت محظور ولا يمكنك إرسال الرسائل.")
         return
@@ -256,7 +257,7 @@ def handle_video(update: Update, context: CallbackContext):
 
 def handle_audio(update: Update, context: CallbackContext):
     uid = update.effective_chat.id
-    logger.debug(f"Audio received from user {uid}")
+    logger.info(f"Audio received from user {uid}")
     if uid in blocked_users:
         update.message.reply_text("⚠️ أنت محظور ولا يمكنك إرسال الرسائل.")
         return
@@ -284,7 +285,7 @@ def handle_audio(update: Update, context: CallbackContext):
 
 def handle_document(update: Update, context: CallbackContext):
     uid = update.effective_chat.id
-    logger.debug(f"Document received from user {uid}")
+    logger.info(f"Document received from user {uid}")
     if uid in blocked_users:
         update.message.reply_text("⚠️ أنت محظور ولا يمكنك إرسال الرسائل.")
         return
@@ -386,25 +387,41 @@ def health_check():
 
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook_handler():
-    logger.debug("Webhook handler received POST request")
+    logger.info("Received POST request to webhook endpoint")
     if request.method == "POST":
-        update = Update.de_json(request.get_json(force=True), bot)
-        dispatcher.process_update(update)
-        return "ok", 200
+        try:
+            update = Update.de_json(request.get_json(force=True), bot)
+            logger.info(f"Processing update: {update}")
+            if update is None:
+                logger.warning("Received invalid update from Telegram")
+                return "Invalid update", 400
+            dispatcher.process_update(update)
+            logger.info("Update processed successfully")
+            return "ok", 200
+        except Exception as e:
+            logger.error(f"Error processing webhook: {e}")
+            return "Error", 500
+    logger.warning("Invalid request method")
     return "Method Not Allowed", 405
 
 def set_webhook():
-    if WEBHOOK_URL:
+    if WEBHOOK_URL and TOKEN:
         webhook_url = f"{WEBHOOK_URL}/{TOKEN}"
-        bot.set_webhook(webhook_url)
-        logger.info(f"Webhook set to {webhook_url}")
-        bot.send_message(OWNER_ID, "✅ Bot is running")
+        try:
+            bot.set_webhook(webhook_url)
+            logger.info(f"Webhook set to {webhook_url}")
+            bot.send_message(OWNER_ID, "✅ Bot is running with Webhook")
+        except Exception as e:
+            logger.error(f"Failed to set webhook: {e}")
     else:
-        logger.error("WEBHOOK_URL is not set in environment variables.")
+        logger.error("WEBHOOK_URL or TOKEN is not set in environment variables.")
 
 def delete_webhook():
-    bot.delete_webhook()
-    logger.info("Webhook deleted.")
+    try:
+        bot.delete_webhook()
+        logger.info("Webhook deleted.")
+    except Exception as e:
+        logger.error(f"Failed to delete webhook: {e}")
 
 # ───── تسجيل الأوامر ──────────────────────────────────────
 dispatcher.add_handler(CommandHandler("start", cmd_start))
@@ -421,7 +438,7 @@ dispatcher.add_handler(MessageHandler(Filters.document, handle_document))
 
 # ───── Main ─────────────────────────────────────────────
 if __name__ == "__main__":
-    logger.info(f"Starting bot with OWNER_ID={OWNER_ID}, USE_WEBHOOK={USE_WEBHOOK}")
+    logger.info(f"Starting bot with OWNER_ID={OWNER_ID}, USE_WEBHOOK={USE_WEBHOOK}, PORT={PORT}")
     load_active_users()  # تحميل المستخدمين النشطين عند بدء التشغيل
     if USE_WEBHOOK:
         set_webhook()
