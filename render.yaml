@@ -7,18 +7,14 @@ services:
     startCommand: gunicorn bot:app --workers 4 --bind 0.0.0.0:$PORT
     envVars:
       - key: TELEGRAM_TOKEN
-        sync: false  # أدخل التوكن يدويًا في Render
+        sync: false
       - key: OWNER_ID
-        sync: false  # أدخل معرف المشرف يدويًا
+        sync: false
       - key: ACCESS_PASSWORD
-        sync: false  # أدخل كلمة المرور أو اتركها فارغة
+        sync: false
       - key: USE_WEBHOOK
         value: True
       - key: WEBHOOK_URL
-        value: https://telegram-bot-5s3h.onrender.com  # تأكد من أن هذا هو عنوان URL الصحيح لخدمتك
+        value: https://telegram-bot-5s3h.onrender.com
       - key: PORT
         value: 8443
-    disks:
-      - name: data
-        mountPath: /data
-        sizeGB: 1  # 1 جيجابايت كافٍ لـ users.json
