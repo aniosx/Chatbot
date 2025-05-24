@@ -33,9 +33,13 @@ if os.path.exists(USERS_FILE):
     try:
         with open(USERS_FILE, "r", encoding="utf-8") as f:
             users_data = json.load(f)
+        # إضافة first_message_sent إلى الإدخالات القديمة إذا كانت مفقودة
+        for uid, info in users_data.items():
+            if "first_message_sent" not in info:
+                info["first_message_sent"] = False
         logger.debug(f"Loaded users: {len(users_data)} entries")
     except Exception as e:
-        logger.error(f"Failed to load users: {e}")
+        logger.error(f"Failed to load users: {e}", exc_info=True)
 else:
     logger.debug(f"Creating new users file at {USERS_FILE}")
     try:
@@ -43,7 +47,7 @@ else:
             json.dump({}, f, ensure_ascii=False, indent=2)
         logger.debug("Users file created successfully")
     except Exception as e:
-        logger.error(f"Failed to create users file: {e}")
+        logger.error(f"Failed to create users file: {e}", exc_info=True)
         raise
 
 def save_users():
@@ -53,7 +57,7 @@ def save_users():
             json.dump(users_data, f, ensure_ascii=False, indent=2)
         logger.debug("Users saved successfully")
     except Exception as e:
-        logger.error(f"Failed to save users: {e}")
+        logger.error(f"Failed to save users: {e}", exc_info=True)
 
 def generate_alias():
     return "".join(random.choices("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", k=4))
@@ -136,7 +140,7 @@ def cmd_start(update: Update, context: CallbackContext):
             logger.error(f"Failed to notify admin about new user {uid}: {e}")
         save_users()
     user = users_data[uid]
-    logger.debug(f"User {uid} status: joined={user['joined']}, pwd_ok={user['pwd_ok']}")
+    logger.debug(f"User {uid} status: joined={user['joined']}, pwd_ok={user['pwd_ok']}, first_message_sent={user['first_message_sent']}")
     if user["joined"] and user["pwd_ok"]:
         update.message.reply_text(f"🚀 مرحبًا مجددًا {user['alias']}! أنت بالفعل في الدردشة.")
     else:
@@ -179,10 +183,11 @@ def handle_text(update: Update, context: CallbackContext):
         return
 
     alias = user["alias"]
-    is_first_message = not user["first_message_sent"]
+    is_first_message = not user.get("first_message_sent", False)
     success = broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[{alias}] {text}"))
     
     if is_first_message:
+        logger.debug(f"First message detected for user {uid}")
         user["first_message_sent"] = True
         save_users()
         if success:
