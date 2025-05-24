@@ -12,7 +12,7 @@ from telegram.ext import Updater, Dispatcher, CommandHandler, MessageHandler, Fi
 
 # ───── إعدادات أساسية ────────────────────────────────
 logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s", level=logging.DEBUG  # DEBUG للتصحيح
+    format="%(asctime)s - %(levelname)s - %(message)s", level=logging.DEBUG
 )
 logger = logging.getLogger(__name__)
 
@@ -24,21 +24,33 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").rstrip("/")
 PORT = int(os.getenv("PORT", "8443"))
 
 # ───── ملفات البيانات ───────────────────────────────
-USERS_FILE = "/data/users.json" if os.path.exists("/data") else "users.json"  # دعم Render Disks
+USERS_FILE = "/data/users.json"  # استخدام القرص الدائم في Render
 
 if not os.path.exists(USERS_FILE):
+    logger.debug(f"Creating new users file at {USERS_FILE}")
     with open(USERS_FILE, "w", encoding="utf-8") as f:
         json.dump({}, f, ensure_ascii=False, indent=2)
 
 if os.path.exists(USERS_FILE):
-    with open(USERS_FILE, "r", encoding="utf-8") as f:
-        users_data = json.load(f)
+    logger.debug(f"Loading users from {USERS_FILE}")
+    try:
+        with open(USERS_FILE, "r", encoding="utf-8") as f:
+            users_data = json.load(f)
+        logger.debug(f"Loaded users: {len(users_data)} entries")
+    except Exception as e:
+        logger.error(f"Failed to load users: {e}")
+        users_data = {}
 else:
     users_data = {}
 
 def save_users():
-    with open(USERS_FILE, "w", encoding="utf-8") as f:
-        json.dump(users_data, f, ensure_ascii=False, indent=2)
+    logger.debug(f"Saving users to {USERS_FILE}")
+    try:
+        with open(USERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(users_data, f, ensure_ascii=False, indent=2)
+        logger.debug("Users saved successfully")
+    except Exception as e:
+        logger.error(f"Failed to save users: {e}")
 
 def generate_alias():
     return "".join(random.choices("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", k=4))
@@ -91,7 +103,9 @@ def is_admin(user_id):
 # ───── الأوامر الأساسية ───────────────────────────────
 def cmd_start(update: Update, context: CallbackContext):
     uid = str(update.effective_chat.id)
+    logger.debug(f"Processing /start for user {uid}")
     if uid not in users_data:
+        logger.debug(f"New user {uid}, generating alias")
         users_data[uid] = {
             "alias": generate_alias(),
             "blocked": False,
@@ -101,9 +115,14 @@ def cmd_start(update: Update, context: CallbackContext):
         }
         save_users()
     user = users_data[uid]
+    logger.debug(f"User {uid} status: joined={user['joined']}, pwd_ok={user['pwd_ok']}")
     if user["joined"] and user["pwd_ok"]:
         update.message.reply_text(f"🚀 مرحبًا مجددًا {user['alias']}! أنت بالفعل في الدردشة.")
     else:
+        user["joined"] = True
+        if not is_password_required():
+            user["pwd_ok"] = True
+        save_users()
         update.message.reply_text(welcome_text(uid))
 
 def handle_text(update: Update, context: CallbackContext):
