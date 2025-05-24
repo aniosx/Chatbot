@@ -15,6 +15,10 @@ services:
       - key: USE_WEBHOOK
         value: True
       - key: WEBHOOK_URL
-        value: https://your-service-name.onrender.com
+        value: https://telegram-bot-5s3h.onrender.com  # استبدل بـ URL خدمتك الفعلي
       - key: PORT
         value: 8443
+    disks:
+      - name: data
+        mountPath: /data
+        sizeGB: 1  # 1 جيجابايت كافٍ لـ users.json
