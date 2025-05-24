@@ -23,7 +23,7 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 USE_WEBHOOK = os.getenv("USE_WEBHOOK", "True").lower() == "true"  # Webhook افتراضيًا
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").rstrip("/")
-PORT = int(os.getenv("PORT", "443"))  # منفذ HTTPS الافتراضي لـ Render
+PORT = int(os.getenv("PORT", "10000"))  # استخدم PORT من Render، أو 10000 للاختبار المحلي
 ACTIVE_USERS_FILE = "active_users.json"  # ملف لتخزين المستخدمين النشطين
 
 # ───── حدود الرسائل والملفات ─────────────────────────
@@ -444,7 +444,7 @@ if __name__ == "__main__":
     try:
         load_active_users()  # تحميل المستخدمين النشطين
         set_webhook()  # إعداد Webhook دائمًا لـ Render Web Service
-        logger.info("Starting server with Gunicorn...")
+        logger.info(f"Starting Flask server on port {PORT}...")
         app.run(host="0.0.0.0", port=PORT, debug=False)
     except Exception as e:
         logger.error(f"Failed to start bot: {e}")
