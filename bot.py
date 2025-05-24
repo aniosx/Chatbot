@@ -26,16 +26,8 @@ PORT = int(os.getenv("PORT", "8443"))
 # ───── ملفات البيانات ───────────────────────────────
 USERS_FILE = "users.json"
 
-if not os.path.exists(USERS_FILE):
-    logger.debug(f"Creating new users file at {USERS_FILE}")
-    try:
-        with open(USERS_FILE, "w", encoding="utf-8") as f:
-            json.dump({}, f, ensure_ascii=False, indent=2)
-        logger.debug("Users file created successfully")
-    except Exception as e:
-        logger.error(f"Failed to create users file: {e}")
-        raise
-
+# تحميل users.json أو إنشاء ملف فارغ إذا لم يكن موجودًا
+users_data = {}
 if os.path.exists(USERS_FILE):
     logger.debug(f"Loading users from {USERS_FILE}")
     try:
@@ -44,9 +36,15 @@ if os.path.exists(USERS_FILE):
         logger.debug(f"Loaded users: {len(users_data)} entries")
     except Exception as e:
         logger.error(f"Failed to load users: {e}")
-        users_data = {}
 else:
-    users_data = {}
+    logger.debug(f"Creating new users file at {USERS_FILE}")
+    try:
+        with open(USERS_FILE, "w", encoding="utf-8") as f:
+            json.dump({}, f, ensure_ascii=False, indent=2)
+        logger.debug("Users file created successfully")
+    except Exception as e:
+        logger.error(f"Failed to create users file: {e}")
+        raise
 
 def save_users():
     logger.debug(f"Saving users to {USERS_FILE}")
