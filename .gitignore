@@ -6,5 +6,5 @@ __pycache__/
 env/
 venv/
 *.log
-users_list.txt
 users.json
+users_list.txt
