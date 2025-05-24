@@ -23,7 +23,7 @@ OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 USE_WEBHOOK = os.getenv("USE_WEBHOOK", "False").lower() == "true"
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").rstrip("/")
 PORT = int(os.getenv("PORT", "8443"))
-VERIFIED_USERS_FILE = "verified_users.json"  # ملف لتخزين المستخدمين المؤهلين
+ACTIVE_USERS_FILE = "active_users.json"  # ملف لتخزين المستخدمين النشطين
 
 # ───── حدود الرسائل والملفات ─────────────────────────
 MAX_MESSAGES_PER_MINUTE = 5  # لكل مستخدم
@@ -32,33 +32,33 @@ MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 ميجابايت
 
 message_timestamps = {}  # user_id -> [timestamps] لحد الرسائل الفردية
 broadcast_timestamps = deque()  # لحد الرسائل المرسلة بين المستخدمين
-password_verified = set([OWNER_ID])  # تخزين مؤقت للمستخدمين المؤهلين
+active_users = set([OWNER_ID])  # تخزين مؤقت للمستخدمين النشطين
 blocked_users = set()  # المستخدمون المحظورون
 user_aliases = {}  # user_id -> alias لتخزين الأسماء المستعارة
 
-# ───── وظائف لإدارة المستخدمين المؤهلين ───────────────
-def load_verified_users():
-    """تحميل قائمة المستخدمين المؤهلين من ملف JSON"""
-    global password_verified
+# ───── وظائف لإدارة المستخدمين النشطين ───────────────
+def load_active_users():
+    """تحميل قائمة المستخدمين النشطين من ملف JSON"""
+    global active_users
     try:
-        with open(VERIFIED_USERS_FILE, "r") as f:
-            verified_ids = json.load(f)
-            password_verified.update(verified_ids)
-            logger.info(f"Loaded verified users: {password_verified}")
+        with open(ACTIVE_USERS_FILE, "r") as f:
+            active_ids = json.load(f)
+            active_users.update(active_ids)
+            logger.info(f"Loaded active users: {active_users}")
     except FileNotFoundError:
-        logger.info("No verified users file found, starting with OWNER_ID only")
-        password_verified.add(OWNER_ID)
+        logger.info("No active users file found, starting with OWNER_ID only")
+        active_users.add(OWNER_ID)
     except Exception as e:
-        logger.error(f"Error loading verified users: {e}")
+        logger.error(f"Error loading active users: {e}")
 
-def save_verified_users():
-    """حفظ قائمة المستخدمين المؤهلين إلى ملف JSON"""
+def save_active_users():
+    """حفظ قائمة المستخدمين النشطين إلى ملف JSON"""
     try:
-        with open(VERIFIED_USERS_FILE, "w") as f:
-            json.dump(list(password_verified), f)
-        logger.debug(f"Saved verified users: {password_verified}")
+        with open(ACTIVE_USERS_FILE, "w") as f:
+            json.dump(list(active_users), f)
+        logger.debug(f"Saved active users: {active_users}")
     except Exception as e:
-        logger.error(f"Error saving verified users: {e}")
+        logger.error(f"Error saving active users: {e}")
 
 # ───── وظائف مساعدة ───────────────────────────────────
 def can_send(user_id):
@@ -105,9 +105,9 @@ def broadcast_to_others(sender_id, func):
     if not can_broadcast():
         logger.warning("Broadcast limit reached, cannot send message")
         return False
-    logger.debug(f"Broadcasting message from {sender_id} to {len(password_verified)} verified users")
+    logger.debug(f"Broadcasting message from {sender_id} to {len(active_users)} active users")
     success = False
-    for uid in password_verified:
+    for uid in active_users:
         if uid != sender_id and uid not in blocked_users:
             try:
                 logger.debug(f"Sending message to user {uid}")
@@ -117,7 +117,7 @@ def broadcast_to_others(sender_id, func):
             except Exception as e:
                 logger.error(f"Failed to broadcast to {uid}: {e}")
     if not success:
-        logger.warning(f"No valid recipients for broadcast from {sender_id}. Verified users: {password_verified}, Blocked users: {blocked_users}")
+        logger.warning(f"No valid recipients for broadcast from {sender_id}. Active users: {active_users}, Blocked users: {blocked_users}")
     return success
 
 # ───── إعداد البوت والفلاسك ───────────────────────────
@@ -133,9 +133,9 @@ def cmd_start(update: Update, context: CallbackContext):
     if uid in blocked_users:
         update.message.reply_text("⚠️ أنت محظور ولا يمكنك استخدام البوت.")
         return
-    password_verified.add(uid)
-    save_verified_users()
-    logger.debug(f"User {uid} added to verified users")
+    active_users.add(uid)
+    save_active_users()
+    logger.debug(f"User {uid} added to active users")
     update.message.reply_text("🚀 مرحبًا! يمكنك الآن الدردشة.")
 
 def handle_text(update: Update, context: CallbackContext):
@@ -147,6 +147,8 @@ def handle_text(update: Update, context: CallbackContext):
     if not can_send(uid):
         update.message.reply_text("⚠️ تجاوزت 5 رسائل في الدقيقة. انتظر قليلاً.")
         return
+    active_users.add(uid)
+    save_active_users()
     alias = get_user_alias(uid)
     display_name = get_user_display_name(update.effective_user)
     
@@ -168,6 +170,8 @@ def handle_sticker(update: Update, context: CallbackContext):
     if not can_send(uid):
         update.message.reply_text("⚠️ تجاوزت 5 رسائل في الدقيقة. انتظر قليلاً.")
         return
+    active_users.add(uid)
+    save_active_users()
     sid = update.message.sticker.file_id
     alias = get_user_alias(uid)
     display_name = get_user_display_name(update.effective_user)
@@ -190,6 +194,8 @@ def handle_photo(update: Update, context: CallbackContext):
     if not can_send(uid):
         update.message.reply_text("⚠️ تجاوزت 5 رسائل في الدقيقة. انتظر قليلاً.")
         return
+    active_users.add(uid)
+    save_active_users()
     photo = update.message.photo[-1]
     if photo.file_size > MAX_FILE_SIZE:
         update.message.reply_text("❌ الصورة أكبر من 50 ميجابايت.")
@@ -216,6 +222,8 @@ def handle_video(update: Update, context: CallbackContext):
     if not can_send(uid):
         update.message.reply_text("⚠️ تجاوزت 5 رسائل في الدقيقة. انتظر قليلاً.")
         return
+    active_users.add(uid)
+    save_active_users()
     video = update.message.video
     if video.file_size > MAX_FILE_SIZE:
         update.message.reply_text("❌ الفيديو أكبر من 50 ميجابايت.")
@@ -242,6 +250,8 @@ def handle_audio(update: Update, context: CallbackContext):
     if not can_send(uid):
         update.message.reply_text("⚠️ تجاوزت 5 رسائل في الدقيقة. انتظر قليلاً.")
         return
+    active_users.add(uid)
+    save_active_users()
     audio = update.message.audio
     if audio.file_size > MAX_FILE_SIZE:
         update.message.reply_text("❌ الملف الصوتي أكبر من 50 ميجابايت.")
@@ -268,6 +278,8 @@ def handle_document(update: Update, context: CallbackContext):
     if not can_send(uid):
         update.message.reply_text("⚠️ تجاوزت 5 رسائل في الدقيقة. انتظر قليلاً.")
         return
+    active_users.add(uid)
+    save_active_users()
     doc = update.message.document
     if doc.file_size > MAX_FILE_SIZE:
         update.message.reply_text("❌ الملف أكبر من 50 ميجابايت.")
@@ -308,9 +320,9 @@ def cmd_block(update: Update, context: CallbackContext):
         update.message.reply_text(f"⚠️ المستخدم {target_id} محظور بالفعل.")
         return
     blocked_users.add(target_id)
-    password_verified.discard(target_id)
-    save_verified_users()
-    logger.debug(f"User {target_id} blocked and removed from verified users")
+    active_users.discard(target_id)
+    save_active_users()
+    logger.debug(f"User {target_id} blocked and removed from active users")
     update.message.reply_text(f"🚫 تم حظر المستخدم {target_id}.")
     try:
         bot.send_message(target_id, "⚠️ تم حظرك من الدردشة من قبل المشرف.")
@@ -345,6 +357,14 @@ def cmd_blocked(update: Update, context: CallbackContext):
     blocked_list = "\n".join([str(uid) for uid in blocked_users])
     update.message.reply_text(f"قائمة المستخدمين المحظورين:\n{blocked_list}")
 
+@admin_only
+def cmd_users(update: Update, context: CallbackContext):
+    if not active_users:
+        update.message.reply_text("لا يوجد مستخدمون نشطون حالياً.")
+        return
+    users_list = "\n".join([str(uid) for uid in active_users])
+    update.message.reply_text(f"قائمة المستخدمين النشطين:\n{users_list}")
+
 # ───── Webhook support ──────────────────────
 @app.route("/", methods=["GET"])
 def health_check():
@@ -378,6 +398,7 @@ dispatcher.add_handler(CommandHandler("start", cmd_start))
 dispatcher.add_handler(CommandHandler("block", cmd_block))
 dispatcher.add_handler(CommandHandler("unblock", cmd_unblock))
 dispatcher.add_handler(CommandHandler("blocked", cmd_blocked))
+dispatcher.add_handler(CommandHandler("users", cmd_users))
 dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
 dispatcher.add_handler(MessageHandler(Filters.sticker, handle_sticker))
 dispatcher.add_handler(MessageHandler(Filters.photo, handle_photo))
@@ -388,7 +409,7 @@ dispatcher.add_handler(MessageHandler(Filters.document, handle_document))
 # ───── Main ─────────────────────────────────────────────
 if __name__ == "__main__":
     logger.info(f"Starting bot with OWNER_ID={OWNER_ID}, USE_WEBHOOK={USE_WEBHOOK}")
-    load_verified_users()  # تحميل المستخدمين المؤهلين عند بدء التشغيل
+    load_active_users()  # تحميل المستخدمين النشطين عند بدء التشغيل
     if USE_WEBHOOK:
         set_webhook()
         logger.info("Starting server with Gunicorn (local fallback to Flask)...")
