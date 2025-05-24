@@ -167,7 +167,7 @@ def handle_text(update: Update, context: CallbackContext):
     
     if is_admin(uid):
         logger.debug(f"Admin {uid} sending message: {update.message.text}")
-        broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[Boss] {update.message.text}"))
+        broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[Bot] {update.message.text}"))
     else:
         logger.debug(f"User {uid} sending message with alias {alias}: {update.message.text}")
         broadcast_to_others(uid, lambda cid: context.bot.send_message(
@@ -190,7 +190,7 @@ def handle_sticker(update: Update, context: CallbackContext):
     display_name = get_user_display_name(update.effective_user)
     
     if is_admin(uid):
-        broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[Boss] أرسل ستيكر:"))
+        broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[Bot] أرسل ستيكر:"))
         broadcast_to_others(uid, lambda cid: context.bot.send_sticker(cid, sticker=sid))
     else:
         broadcast_to_others(uid, lambda cid: context.bot.send_message(
@@ -218,7 +218,7 @@ def handle_photo(update: Update, context: CallbackContext):
     display_name = get_user_display_name(update.effective_user)
     
     if is_admin(uid):
-        broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[Boss] أرسل صورة:"))
+        broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[Bot] أرسل صورة:"))
         broadcast_to_others(uid, lambda cid: context.bot.send_photo(cid, photo=fid))
     else:
         broadcast_to_others(uid, lambda cid: context.bot.send_message(
@@ -246,7 +246,7 @@ def handle_video(update: Update, context: CallbackContext):
     display_name = get_user_display_name(update.effective_user)
     
     if is_admin(uid):
-        broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[Boss] أرسل فيديو:"))
+        broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[Bot] أرسل فيديو:"))
         broadcast_to_others(uid, lambda cid: context.bot.send_video(cid, video=vid))
     else:
         broadcast_to_others(uid, lambda cid: context.bot.send_message(
@@ -274,7 +274,7 @@ def handle_audio(update: Update, context: CallbackContext):
     display_name = get_user_display_name(update.effective_user)
     
     if is_admin(uid):
-        broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[Boss] أرسل ملف صوتي:"))
+        broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[Bot] أرسل ملف صوتي:"))
         broadcast_to_others(uid, lambda cid: context.bot.send_audio(cid, audio=aid))
     else:
         broadcast_to_others(uid, lambda cid: context.bot.send_message(
@@ -302,7 +302,7 @@ def handle_document(update: Update, context: CallbackContext):
     display_name = get_user_display_name(update.effective_user)
     
     if is_admin(uid):
-        broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[Boss] أرسل ملف:"))
+        broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[Bot] أرسل ملف:"))
         broadcast_to_others(uid, lambda cid: context.bot.send_document(cid, document=did))
     else:
         broadcast_to_others(uid, lambda cid: context.bot.send_message(
