@@ -382,7 +382,7 @@ def health_check():
 
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook_handler():
-    ifором request.method == "POST":
+    if request.method == "POST":
         update = Update.de_json(request.get_json(force=True), bot)
         dispatcher.process_update(update)
         return "ok", 200
