@@ -31,6 +31,7 @@ MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 ميجابايت
 message_timestamps = {}  # user_id -> [timestamps] لحد الرسائل الفردية
 broadcast_timestamps = deque()  # لحد الرسائل المرسلة بين المستخدمين
 password_verified = set([OWNER_ID])  # تخزين مؤقت للمستخدمين الذين أدخلوا كلمة المرور
+blocked_users = set()  # المستخدمون المحظورون
 
 def can_send(user_id):
     now = time.time()
@@ -52,9 +53,6 @@ def can_broadcast():
     broadcast_timestamps.append(now)
     return True
 
-# ───── قائمة المستخدمين المحظورين في الذاكرة ────────
-blocked_users = set()
-
 # ───── إعداد البوت والفلاسك ───────────────────────────
 bot = Bot(token=TOKEN)
 updater = Updater(token=TOKEN, use_context=True)
@@ -73,12 +71,14 @@ def broadcast_to_others(sender_id, func):
         logger.warning("Broadcast limit reached: 30 messages per second")
         return False
     success = False
-    try:
-        func(OWNER_ID)  # إرسال إلى المشرف كمثال (يمكن تعديله لمجموعة)
-        success = True
-        time.sleep(0.033)  # تأخير 33 مللي ثانية
-    except Exception as e:
-        logger.warning(f"Failed to broadcast to {OWNER_ID}: {e}")
+    for uid in password_verified:
+        if uid != sender_id and uid not in blocked_users:
+            try:
+                func(uid)
+                success = True
+                time.sleep(0.033)  # تأخير 33 مللي ثانية لتجنب حظر Telegram
+            except Exception as e:
+                logger.warning(f"Failed to broadcast to {uid}: {e}")
     return success
 
 # ───── الأوامر الأساسية ───────────────────────────────
