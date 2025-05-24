@@ -33,10 +33,6 @@ if os.path.exists(USERS_FILE):
     try:
         with open(USERS_FILE, "r", encoding="utf-8") as f:
             users_data = json.load(f)
-        # إضافة first_message_sent إلى الإدخالات القديمة إذا كانت مفقودة
-        for uid, info in users_data.items():
-            if "first_message_sent" not in info:
-                info["first_message_sent"] = False
         logger.debug(f"Loaded users: {len(users_data)} entries")
     except Exception as e:
         logger.error(f"Failed to load users: {e}", exc_info=True)
@@ -127,8 +123,7 @@ def cmd_start(update: Update, context: CallbackContext):
             "blocked": False,
             "joined": False,
             "pwd_ok": not is_password_required() or int(uid) == OWNER_ID,
-            "last_msgs": [],
-            "first_message_sent": False
+            "last_msgs": []
         }
         # إخطار المشرف بالمستخدم الجديد
         try:
@@ -145,7 +140,7 @@ def cmd_start(update: Update, context: CallbackContext):
             logger.error(f"Failed to notify admin about new user {uid}: {e}")
         save_users()
     user = users_data[uid]
-    logger.debug(f"User {uid} status: joined={user['joined']}, pwd_ok={user['pwd_ok']}, first_message_sent={user['first_message_sent']}")
+    logger.debug(f"User {uid} status: joined={user['joined']}, pwd_ok={user['pwd_ok']}")
     if user["joined"] and user["pwd_ok"]:
         update.message.reply_text(f"🚀 مرحبًا مجددًا {user['alias']}! أنت بالفعل في الدردشة.")
     else:
@@ -188,20 +183,7 @@ def handle_text(update: Update, context: CallbackContext):
         return
 
     alias = user["alias"]
-    is_first_message = not user.get("first_message_sent", False)
-    success = broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[{alias}] {text}"))
-    
-    if is_first_message:
-        logger.debug(f"First message detected for user {uid}")
-        user["first_message_sent"] = True  # تحديث في الذاكرة أولاً
-        if save_users():
-            logger.debug(f"Successfully updated first_message_sent for user {uid}")
-        else:
-            logger.warning(f"Failed to save first_message_sent for user {uid}, but updated in memory")
-        if success:
-            update.message.reply_text("✅ رسالتك الأولى وصلت إلى المستخدمين الآخرين!")
-        else:
-            update.message.reply_text("❌ فشل إرسال رسالتك الأولى. حاول مرة أخرى لاحقًا.")
+    broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[{alias}] {text}"))
 
 def handle_sticker(update: Update, context: CallbackContext):
     uid = str(update.effective_chat.id)
@@ -400,7 +382,7 @@ def health_check():
 
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook_handler():
-    if request.method == "POST":
+    ifором request.method == "POST":
         update = Update.de_json(request.get_json(force=True), bot)
         dispatcher.process_update(update)
         return "ok", 200
