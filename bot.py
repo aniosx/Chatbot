@@ -42,6 +42,7 @@ def can_send(user_id):
     times = [t for t in times if now - t < 60]
     if len(times) >= MAX_MESSAGES_PER_MINUTE:
         message_timestamps[user_id] = times
+        logger.debug(f"User {user_id} exceeded message limit: {len(times)} messages in 60s")
         return False
     times.append(now)
     message_timestamps[user_id] = times
@@ -52,12 +53,15 @@ def can_broadcast():
     while broadcast_timestamps and now - broadcast_timestamps[0] > timedelta(seconds=1):
         broadcast_timestamps.popleft()
     if len(broadcast_timestamps) >= MAX_BROADCAST_MESSAGES_PER_SECOND:
+        logger.warning(f"Broadcast limit reached: {len(broadcast_timestamps)} messages per second")
         return False
     broadcast_timestamps.append(now)
     return True
 
 def is_admin(user_id):
-    return user_id == OWNER_ID
+    is_admin_user = user_id == OWNER_ID
+    logger.debug(f"Checking admin status for user {user_id}: {'Admin' if is_admin_user else 'Not Admin'}")
+    return is_admin_user
 
 def is_password_required():
     return bool(ACCESS_PASSWORD)
@@ -71,22 +75,27 @@ def get_user_display_name(user):
 def get_user_alias(user_id):
     """إرجاع اسم مستعار للمستخدم (بدون ID)"""
     if user_id not in user_aliases:
-        user_aliases[user_id] = f"User{random.randint(1000, 9999)}"  # رقم عشوائي للاسم المستعار
+        user_aliases[user_id] = f"User{random.randint(1000, 9999)}"
+        logger.debug(f"Generated alias for user {user_id}: {user_aliases[user_id]}")
     return user_aliases[user_id]
 
 def broadcast_to_others(sender_id, func):
     if not can_broadcast():
-        logger.warning("Broadcast limit reached: 30 messages per second")
+        logger.warning("Broadcast limit reached, cannot send message")
         return False
+    logger.debug(f"Broadcasting message from {sender_id} to {len(password_verified)} verified users")
     success = False
     for uid in password_verified:
         if uid != sender_id and uid not in blocked_users:
             try:
+                logger.debug(f"Sending message to user {uid}")
                 func(uid)
                 success = True
                 time.sleep(0.033)  # تأخير 33 مللي ثانية لتجنب حظر Telegram
             except Exception as e:
-                logger.warning(f"Failed to broadcast to {uid}: {e}")
+                logger.error(f"Failed to broadcast to {uid}: {e}")
+    if not success:
+        logger.warning(f"No valid recipients for broadcast from {sender_id}. Verified users: {password_verified}, Blocked users: {blocked_users}")
     return success
 
 # ───── إعداد البوت والفلاسك ───────────────────────────
@@ -98,6 +107,7 @@ app = Flask(__name__)
 # ───── الأوامر الأساسية ───────────────────────────────
 def cmd_start(update: Update, context: CallbackContext):
     uid = update.effective_chat.id
+    logger.debug(f"Start command received from user {uid}")
     if uid in blocked_users:
         update.message.reply_text("⚠️ أنت محظور ولا يمكنك استخدام البوت.")
         return
@@ -108,6 +118,7 @@ def cmd_start(update: Update, context: CallbackContext):
 
 def handle_text(update: Update, context: CallbackContext):
     uid = update.effective_chat.id
+    logger.debug(f"Text message received from user {uid}: {update.message.text}")
     if uid in blocked_users:
         update.message.reply_text("⚠️ أنت محظور ولا يمكنك إرسال الرسائل.")
         return
@@ -115,6 +126,7 @@ def handle_text(update: Update, context: CallbackContext):
     if is_password_required() and uid not in password_verified:
         if text.strip() == ACCESS_PASSWORD:
             password_verified.add(uid)
+            logger.debug(f"User {uid} verified with password")
             update.message.reply_text("✅ تم قبول كلمة المرور. يمكنك الآن الدردشة.")
         else:
             update.message.reply_text("🔒 كلمة المرور خاطئة.")
@@ -126,16 +138,17 @@ def handle_text(update: Update, context: CallbackContext):
     display_name = get_user_display_name(update.effective_user)
     
     if is_admin(uid):
-        # رسائل المشرف تُرسل باسم البوت
+        logger.debug(f"Admin {uid} sending message: {text}")
         broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[Bot] {text}"))
     else:
-        # رسائل المستخدمين: اسم مستعار لغير المشرف، اسم حقيقي مع ID للمشرف
+        logger.debug(f"User {uid} sending message with alias {alias}: {text}")
         broadcast_to_others(uid, lambda cid: context.bot.send_message(
             cid, f"[{alias}] {text}" if cid != OWNER_ID else f"[{display_name} | ID: {uid}] {text}"
         ))
 
 def handle_sticker(update: Update, context: CallbackContext):
     uid = update.effective_chat.id
+    logger.debug(f"Sticker received from user {uid}")
     if uid in blocked_users:
         update.message.reply_text("⚠️ أنت محظور ولا يمكنك إرسال الرسائل.")
         return
@@ -160,6 +173,7 @@ def handle_sticker(update: Update, context: CallbackContext):
 
 def handle_photo(update: Update, context: CallbackContext):
     uid = update.effective_chat.id
+    logger.debug(f"Photo received from user {uid}")
     if uid in blocked_users:
         update.message.reply_text("⚠️ أنت محظور ولا يمكنك إرسال الرسائل.")
         return
@@ -188,6 +202,7 @@ def handle_photo(update: Update, context: CallbackContext):
 
 def handle_video(update: Update, context: CallbackContext):
     uid = update.effective_chat.id
+    logger.debug(f"Video received from user {uid}")
     if uid in blocked_users:
         update.message.reply_text("⚠️ أنت محظور ولا يمكنك إرسال الرسائل.")
         return
@@ -216,6 +231,7 @@ def handle_video(update: Update, context: CallbackContext):
 
 def handle_audio(update: Update, context: CallbackContext):
     uid = update.effective_chat.id
+    logger.debug(f"Audio received from user {uid}")
     if uid in blocked_users:
         update.message.reply_text("⚠️ أنت محظور ولا يمكنك إرسال الرسائل.")
         return
@@ -244,6 +260,7 @@ def handle_audio(update: Update, context: CallbackContext):
 
 def handle_document(update: Update, context: CallbackContext):
     uid = update.effective_chat.id
+    logger.debug(f"Document received from user {uid}")
     if uid in blocked_users:
         update.message.reply_text("⚠️ أنت محظور ولا يمكنك إرسال الرسائل.")
         return
@@ -293,12 +310,12 @@ def cmd_block(update: Update, context: CallbackContext):
         update.message.reply_text(f"⚠️ المستخدم {target_id} محظور بالفعل.")
         return
     blocked_users.add(target_id)
-    password_verified.discard(target_id)  # إزالة التحقق من كلمة المرور إذا كان محظورًا
+    password_verified.discard(target_id)
     update.message.reply_text(f"🚫 تم حظر المستخدم {target_id}.")
     try:
         bot.send_message(target_id, "⚠️ تم حظرك من الدردشة من قبل المشرف.")
-    except:
-        pass
+    except Exception as e:
+        logger.error(f"Failed to notify user {target_id} of block: {e}")
 
 @admin_only
 def cmd_unblock(update: Update, context: CallbackContext):
@@ -317,8 +334,8 @@ def cmd_unblock(update: Update, context: CallbackContext):
     update.message.reply_text(f"✅ تم إلغاء حظر المستخدم {target_id}.")
     try:
         bot.send_message(target_id, "✅ تم رفع الحظر عنك ويمكنك الآن الدردشة.")
-    except:
-        pass
+    except Exception as e:
+        logger.error(f"Failed to notify user {target_id} of unblock: {e}")
 
 @admin_only
 def cmd_blocked(update: Update, context: CallbackContext):
@@ -331,10 +348,12 @@ def cmd_blocked(update: Update, context: CallbackContext):
 # ───── Webhook support ──────────────────────
 @app.route("/", methods=["GET"])
 def health_check():
+    logger.debug("Health check endpoint accessed")
     return "Bot is running", 200
 
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook_handler():
+    logger.debug("Webhook handler received POST request")
     if request.method == "POST":
         update = Update.de_json(request.get_json(force=True), bot)
         dispatcher.process_update(update)
@@ -368,6 +387,7 @@ dispatcher.add_handler(MessageHandler(Filters.document, handle_document))
 
 # ───── Main ─────────────────────────────────────────────
 if __name__ == "__main__":
+    logger.info(f"Starting bot with OWNER_ID={OWNER_ID}, USE_WEBHOOK={USE_WEBHOOK}")
     if USE_WEBHOOK:
         set_webhook()
         logger.info("Starting server with Gunicorn (local fallback to Flask)...")
