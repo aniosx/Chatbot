@@ -23,42 +23,23 @@ USE_WEBHOOK = os.getenv("USE_WEBHOOK", "False").lower() == "true"
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").rstrip("/")
 PORT = int(os.getenv("PORT", "8443"))
 
-# ───── ملفات البيانات ───────────────────────────────
-USERS_FILE = "users.json"
-
-# تحميل users.json أو إنشاء ملف فارغ إذا لم يكن موجودًا
-users_data = {}
-if os.path.exists(USERS_FILE):
-    logger.debug(f"Loading users from {USERS_FILE}")
-    try:
-        with open(USERS_FILE, "r", encoding="utf-8") as f:
-            users_data = json.load(f)
-        logger.debug(f"Loaded users: {len(users_data)} entries")
-    except Exception as e:
-        logger.error(f"Failed to load users: {e}", exc_info=True)
-else:
-    logger.debug(f"Creating new users file at {USERS_FILE}")
-    try:
-        with open(USERS_FILE, "w", encoding="utf-8") as f:
-            json.dump({}, f, ensure_ascii=False, indent=2)
-        logger.debug("Users file created successfully")
-    except Exception as e:
-        logger.error(f"Failed to create users file: {e}", exc_info=True)
-        raise
+# ───── بيانات المستخدمين في الذاكرة ─────────────────
+# تهيئة users_data في الذاكرة مع إدخال المشرف
+users_data = {
+    "144262846": {
+        "alias": "FJUJ",
+        "blocked": False,
+        "joined": True,
+        "pwd_ok": True,
+        "last_msgs": []
+    }
+}
+logger.debug(f"Initialized users_data with {len(users_data)} entries")
 
 def save_users():
-    logger.debug(f"Saving users to {USERS_FILE}")
-    for attempt in range(3):  # محاولة الحفظ 3 مرات
-        try:
-            with open(USERS_FILE, "w", encoding="utf-8") as f:
-                json.dump(users_data, f, ensure_ascii=False, indent=2)
-            logger.debug("Users saved successfully")
-            return True
-        except Exception as e:
-            logger.error(f"Attempt {attempt + 1} failed to save users: {e}", exc_info=True)
-            time.sleep(0.5)  # تأخير قصير قبل المحاولة التالية
-    logger.error("All attempts to save users failed")
-    return False
+    # لا حاجة لحفظ على القرص، البيانات تبقى في الذاكرة
+    logger.debug("Users data is stored in memory, no disk save required")
+    return True
 
 def generate_alias():
     return "".join(random.choices("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", k=4))
@@ -320,22 +301,14 @@ def cmd_usersfile(update: Update, context: CallbackContext):
         status = "🚫 محظور" if info["blocked"] else "✅ مفعل"
         lines.append(f"{info['alias']} (ID: {uid}) - {status}")
     content = "\n".join(lines)
+    if not content:
+        update.message.reply_text("لا يوجد مستخدمون في الذاكرة.")
+        return
     filename = "users_list.txt"
     with open(filename, "w", encoding="utf-8") as f:
         f.write(content)
     with open(filename, "rb") as f:
-        update.message.reply_document(f, filename=filename)
-
-@admin_only
-def cmd_updateusers(update: Update, context: CallbackContext):
-    if save_users():
-        try:
-            with open(USERS_FILE, "rb") as f:
-                update.message.reply_document(f, filename=USERS_FILE, caption="✅ تم حفظ users.json. قم بتحديث المستودع بهذا الملف.")
-        except Exception as e:
-            update.message.reply_text(f"❌ فشل إرسال users.json: {e}")
-    else:
-        update.message.reply_text("❌ فشل حفظ users.json. تحقق من السجلات.")
+        update.message.reply_document(f, filename=filename, caption="📋 قائمة المستخدمين في الذاكرة")
 
 @admin_only
 def cmd_changepassword(update: Update, context: CallbackContext):
@@ -408,7 +381,6 @@ dispatcher.add_handler(CommandHandler("block", cmd_block))
 dispatcher.add_handler(CommandHandler("unblock", cmd_unblock))
 dispatcher.add_handler(CommandHandler("blocked", cmd_blocked))
 dispatcher.add_handler(CommandHandler("usersfile", cmd_usersfile))
-dispatcher.add_handler(CommandHandler("updateusers", cmd_updateusers))
 dispatcher.add_handler(CommandHandler("changepassword", cmd_changepassword))
 
 dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
