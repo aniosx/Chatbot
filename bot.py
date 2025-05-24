@@ -4,6 +4,7 @@
 import os
 import time
 import logging
+import json
 from flask import Flask, request
 from telegram import Bot, Update
 from telegram.ext import Updater, Dispatcher, CommandHandler, MessageHandler, Filters, CallbackContext
@@ -19,10 +20,10 @@ logger = logging.getLogger(__name__)
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
-ACCESS_PASSWORD = os.getenv("ACCESS_PASSWORD", "").strip()
 USE_WEBHOOK = os.getenv("USE_WEBHOOK", "False").lower() == "true"
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").rstrip("/")
 PORT = int(os.getenv("PORT", "8443"))
+VERIFIED_USERS_FILE = "verified_users.json"  # ملف لتخزين المستخدمين المؤهلين
 
 # ───── حدود الرسائل والملفات ─────────────────────────
 MAX_MESSAGES_PER_MINUTE = 5  # لكل مستخدم
@@ -31,9 +32,33 @@ MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 ميجابايت
 
 message_timestamps = {}  # user_id -> [timestamps] لحد الرسائل الفردية
 broadcast_timestamps = deque()  # لحد الرسائل المرسلة بين المستخدمين
-password_verified = set([OWNER_ID])  # تخزين مؤقت للمستخدمين الذين أدخلوا كلمة المرور
+password_verified = set([OWNER_ID])  # تخزين مؤقت للمستخدمين المؤهلين
 blocked_users = set()  # المستخدمون المحظورون
 user_aliases = {}  # user_id -> alias لتخزين الأسماء المستعارة
+
+# ───── وظائف لإدارة المستخدمين المؤهلين ───────────────
+def load_verified_users():
+    """تحميل قائمة المستخدمين المؤهلين من ملف JSON"""
+    global password_verified
+    try:
+        with open(VERIFIED_USERS_FILE, "r") as f:
+            verified_ids = json.load(f)
+            password_verified.update(verified_ids)
+            logger.info(f"Loaded verified users: {password_verified}")
+    except FileNotFoundError:
+        logger.info("No verified users file found, starting with OWNER_ID only")
+        password_verified.add(OWNER_ID)
+    except Exception as e:
+        logger.error(f"Error loading verified users: {e}")
+
+def save_verified_users():
+    """حفظ قائمة المستخدمين المؤهلين إلى ملف JSON"""
+    try:
+        with open(VERIFIED_USERS_FILE, "w") as f:
+            json.dump(list(password_verified), f)
+        logger.debug(f"Saved verified users: {password_verified}")
+    except Exception as e:
+        logger.error(f"Error saving verified users: {e}")
 
 # ───── وظائف مساعدة ───────────────────────────────────
 def can_send(user_id):
@@ -62,9 +87,6 @@ def is_admin(user_id):
     is_admin_user = user_id == OWNER_ID
     logger.debug(f"Checking admin status for user {user_id}: {'Admin' if is_admin_user else 'Not Admin'}")
     return is_admin_user
-
-def is_password_required():
-    return bool(ACCESS_PASSWORD)
 
 def get_user_display_name(user):
     """إرجاع اسم العرض بناءً على المستخدم"""
@@ -111,25 +133,16 @@ def cmd_start(update: Update, context: CallbackContext):
     if uid in blocked_users:
         update.message.reply_text("⚠️ أنت محظور ولا يمكنك استخدام البوت.")
         return
-    if not is_password_required() or uid in password_verified:
-        update.message.reply_text("🚀 مرحبًا! يمكنك الآن الدردشة.")
-        return
-    update.message.reply_text("🔒 أرسل كلمة المرور للانضمام.")
+    password_verified.add(uid)
+    save_verified_users()
+    logger.debug(f"User {uid} added to verified users")
+    update.message.reply_text("🚀 مرحبًا! يمكنك الآن الدردشة.")
 
 def handle_text(update: Update, context: CallbackContext):
     uid = update.effective_chat.id
     logger.debug(f"Text message received from user {uid}: {update.message.text}")
     if uid in blocked_users:
         update.message.reply_text("⚠️ أنت محظور ولا يمكنك إرسال الرسائل.")
-        return
-    text = update.message.text or ""
-    if is_password_required() and uid not in password_verified:
-        if text.strip() == ACCESS_PASSWORD:
-            password_verified.add(uid)
-            logger.debug(f"User {uid} verified with password")
-            update.message.reply_text("✅ تم قبول كلمة المرور. يمكنك الآن الدردشة.")
-        else:
-            update.message.reply_text("🔒 كلمة المرور خاطئة.")
         return
     if not can_send(uid):
         update.message.reply_text("⚠️ تجاوزت 5 رسائل في الدقيقة. انتظر قليلاً.")
@@ -138,12 +151,12 @@ def handle_text(update: Update, context: CallbackContext):
     display_name = get_user_display_name(update.effective_user)
     
     if is_admin(uid):
-        logger.debug(f"Admin {uid} sending message: {text}")
-        broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[Bot] {text}"))
+        logger.debug(f"Admin {uid} sending message: {update.message.text}")
+        broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[Bot] {update.message.text}"))
     else:
-        logger.debug(f"User {uid} sending message with alias {alias}: {text}")
+        logger.debug(f"User {uid} sending message with alias {alias}: {update.message.text}")
         broadcast_to_others(uid, lambda cid: context.bot.send_message(
-            cid, f"[{alias}] {text}" if cid != OWNER_ID else f"[{display_name} | ID: {uid}] {text}"
+            cid, f"[{alias}] {update.message.text}" if cid != OWNER_ID else f"[{display_name} | ID: {uid}] {update.message.text}"
         ))
 
 def handle_sticker(update: Update, context: CallbackContext):
@@ -151,9 +164,6 @@ def handle_sticker(update: Update, context: CallbackContext):
     logger.debug(f"Sticker received from user {uid}")
     if uid in blocked_users:
         update.message.reply_text("⚠️ أنت محظور ولا يمكنك إرسال الرسائل.")
-        return
-    if is_password_required() and uid not in password_verified:
-        update.message.reply_text("🔒 أرسل كلمة المرور أولاً.")
         return
     if not can_send(uid):
         update.message.reply_text("⚠️ تجاوزت 5 رسائل في الدقيقة. انتظر قليلاً.")
@@ -176,9 +186,6 @@ def handle_photo(update: Update, context: CallbackContext):
     logger.debug(f"Photo received from user {uid}")
     if uid in blocked_users:
         update.message.reply_text("⚠️ أنت محظور ولا يمكنك إرسال الرسائل.")
-        return
-    if is_password_required() and uid not in password_verified:
-        update.message.reply_text("🔒 أرسل كلمة المرور أولاً.")
         return
     if not can_send(uid):
         update.message.reply_text("⚠️ تجاوزت 5 رسائل في الدقيقة. انتظر قليلاً.")
@@ -206,9 +213,6 @@ def handle_video(update: Update, context: CallbackContext):
     if uid in blocked_users:
         update.message.reply_text("⚠️ أنت محظور ولا يمكنك إرسال الرسائل.")
         return
-    if is_password_required() and uid not in password_verified:
-        update.message.reply_text("🔒 أرسل كلمة المرور أولاً.")
-        return
     if not can_send(uid):
         update.message.reply_text("⚠️ تجاوزت 5 رسائل في الدقيقة. انتظر قليلاً.")
         return
@@ -235,9 +239,6 @@ def handle_audio(update: Update, context: CallbackContext):
     if uid in blocked_users:
         update.message.reply_text("⚠️ أنت محظور ولا يمكنك إرسال الرسائل.")
         return
-    if is_password_required() and uid not in password_verified:
-        update.message.reply_text("🔒 أرسل كلمة المرور أولاً.")
-        return
     if not can_send(uid):
         update.message.reply_text("⚠️ تجاوزت 5 رسائل في الدقيقة. انتظر قليلاً.")
         return
@@ -263,9 +264,6 @@ def handle_document(update: Update, context: CallbackContext):
     logger.debug(f"Document received from user {uid}")
     if uid in blocked_users:
         update.message.reply_text("⚠️ أنت محظور ولا يمكنك إرسال الرسائل.")
-        return
-    if is_password_required() and uid not in password_verified:
-        update.message.reply_text("🔒 أرسل كلمة المرور أولاً.")
         return
     if not can_send(uid):
         update.message.reply_text("⚠️ تجاوزت 5 رسائل في الدقيقة. انتظر قليلاً.")
@@ -311,6 +309,8 @@ def cmd_block(update: Update, context: CallbackContext):
         return
     blocked_users.add(target_id)
     password_verified.discard(target_id)
+    save_verified_users()
+    logger.debug(f"User {target_id} blocked and removed from verified users")
     update.message.reply_text(f"🚫 تم حظر المستخدم {target_id}.")
     try:
         bot.send_message(target_id, "⚠️ تم حظرك من الدردشة من قبل المشرف.")
@@ -388,6 +388,7 @@ dispatcher.add_handler(MessageHandler(Filters.document, handle_document))
 # ───── Main ─────────────────────────────────────────────
 if __name__ == "__main__":
     logger.info(f"Starting bot with OWNER_ID={OWNER_ID}, USE_WEBHOOK={USE_WEBHOOK}")
+    load_verified_users()  # تحميل المستخدمين المؤهلين عند بدء التشغيل
     if USE_WEBHOOK:
         set_webhook()
         logger.info("Starting server with Gunicorn (local fallback to Flask)...")
