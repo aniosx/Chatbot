@@ -9,6 +9,7 @@ from telegram import Bot, Update
 from telegram.ext import Updater, Dispatcher, CommandHandler, MessageHandler, Filters, CallbackContext
 from collections import deque
 from datetime import datetime, timedelta
+import random
 
 # ───── إعدادات أساسية ────────────────────────────────
 logging.basicConfig(
@@ -32,7 +33,9 @@ message_timestamps = {}  # user_id -> [timestamps] لحد الرسائل الف�
 broadcast_timestamps = deque()  # لحد الرسائل المرسلة بين المستخدمين
 password_verified = set([OWNER_ID])  # تخزين مؤقت للمستخدمين الذين أدخلوا كلمة المرور
 blocked_users = set()  # المستخدمون المحظورون
+user_aliases = {}  # user_id -> alias لتخزين الأسماء المستعارة
 
+# ───── وظائف مساعدة ───────────────────────────────────
 def can_send(user_id):
     now = time.time()
     times = message_timestamps.get(user_id, [])
@@ -53,18 +56,23 @@ def can_broadcast():
     broadcast_timestamps.append(now)
     return True
 
-# ───── إعداد البوت والفلاسك ───────────────────────────
-bot = Bot(token=TOKEN)
-updater = Updater(token=TOKEN, use_context=True)
-dispatcher: Dispatcher = updater.dispatcher
-app = Flask(__name__)
-
-# ───── وظائف مساعدة ───────────────────────────────────
 def is_admin(user_id):
     return user_id == OWNER_ID
 
 def is_password_required():
     return bool(ACCESS_PASSWORD)
+
+def get_user_display_name(user):
+    """إرجاع اسم العرض بناءً على المستخدم"""
+    if user.username:
+        return f"@{user.username}"
+    return user.first_name or f"User{user.id}"
+
+def get_user_alias(user_id):
+    """إرجاع اسم مستعار للمستخدم (بدون ID)"""
+    if user_id not in user_aliases:
+        user_aliases[user_id] = f"User{random.randint(1000, 9999)}"  # رقم عشوائي للاسم المستعار
+    return user_aliases[user_id]
 
 def broadcast_to_others(sender_id, func):
     if not can_broadcast():
@@ -80,6 +88,12 @@ def broadcast_to_others(sender_id, func):
             except Exception as e:
                 logger.warning(f"Failed to broadcast to {uid}: {e}")
     return success
+
+# ───── إعداد البوت والفلاسك ───────────────────────────
+bot = Bot(token=TOKEN)
+updater = Updater(token=TOKEN, use_context=True)
+dispatcher: Dispatcher = updater.dispatcher
+app = Flask(__name__)
 
 # ───── الأوامر الأساسية ───────────────────────────────
 def cmd_start(update: Update, context: CallbackContext):
@@ -108,8 +122,17 @@ def handle_text(update: Update, context: CallbackContext):
     if not can_send(uid):
         update.message.reply_text("⚠️ تجاوزت 5 رسائل في الدقيقة. انتظر قليلاً.")
         return
-    alias = f"User{uid}"
-    broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[{alias}] {text}"))
+    alias = get_user_alias(uid)
+    display_name = get_user_display_name(update.effective_user)
+    
+    if is_admin(uid):
+        # رسائل المشرف تُرسل باسم البوت
+        broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[Bot] {text}"))
+    else:
+        # رسائل المستخدمين: اسم مستعار لغير المشرف، اسم حقيقي مع ID للمشرف
+        broadcast_to_others(uid, lambda cid: context.bot.send_message(
+            cid, f"[{alias}] {text}" if cid != OWNER_ID else f"[{display_name} | ID: {uid}] {text}"
+        ))
 
 def handle_sticker(update: Update, context: CallbackContext):
     uid = update.effective_chat.id
@@ -123,9 +146,17 @@ def handle_sticker(update: Update, context: CallbackContext):
         update.message.reply_text("⚠️ تجاوزت 5 رسائل في الدقيقة. انتظر قليلاً.")
         return
     sid = update.message.sticker.file_id
-    alias = f"User{uid}"
-    broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[{alias}] أرسل ستيكر:"))
-    broadcast_to_others(uid, lambda cid: context.bot.send_sticker(cid, sticker=sid))
+    alias = get_user_alias(uid)
+    display_name = get_user_display_name(update.effective_user)
+    
+    if is_admin(uid):
+        broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[Bot] أرسل ستيكر:"))
+        broadcast_to_others(uid, lambda cid: context.bot.send_sticker(cid, sticker=sid))
+    else:
+        broadcast_to_others(uid, lambda cid: context.bot.send_message(
+            cid, f"[{alias}] أرسل ستيكر:" if cid != OWNER_ID else f"[{display_name} | ID: {uid}] أرسل ستيكر:"
+        ))
+        broadcast_to_others(uid, lambda cid: context.bot.send_sticker(cid, sticker=sid))
 
 def handle_photo(update: Update, context: CallbackContext):
     uid = update.effective_chat.id
@@ -143,9 +174,17 @@ def handle_photo(update: Update, context: CallbackContext):
         update.message.reply_text("❌ الصورة أكبر من 50 ميجابايت.")
         return
     fid = photo.file_id
-    alias = f"User{uid}"
-    broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[{alias}] أرسل صورة:"))
-    broadcast_to_others(uid, lambda cid: context.bot.send_photo(cid, photo=fid))
+    alias = get_user_alias(uid)
+    display_name = get_user_display_name(update.effective_user)
+    
+    if is_admin(uid):
+        broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[Bot] أرسل صورة:"))
+        broadcast_to_others(uid, lambda cid: context.bot.send_photo(cid, photo=fid))
+    else:
+        broadcast_to_others(uid, lambda cid: context.bot.send_message(
+            cid, f"[{alias}] أرسل صورة:" if cid != OWNER_ID else f"[{display_name} | ID: {uid}] أرسل صورة:"
+        ))
+        broadcast_to_others(uid, lambda cid: context.bot.send_photo(cid, photo=fid))
 
 def handle_video(update: Update, context: CallbackContext):
     uid = update.effective_chat.id
@@ -163,9 +202,17 @@ def handle_video(update: Update, context: CallbackContext):
         update.message.reply_text("❌ الفيديو أكبر من 50 ميجابايت.")
         return
     vid = video.file_id
-    alias = f"User{uid}"
-    broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[{alias}] أرسل فيديو:"))
-    broadcast_to_others(uid, lambda cid: context.bot.send_video(cid, video=vid))
+    alias = get_user_alias(uid)
+    display_name = get_user_display_name(update.effective_user)
+    
+    if is_admin(uid):
+        broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[Bot] أرسل فيديو:"))
+        broadcast_to_others(uid, lambda cid: context.bot.send_video(cid, video=vid))
+    else:
+        broadcast_to_others(uid, lambda cid: context.bot.send_message(
+            cid, f"[{alias}] أرسل فيديو:" if cid != OWNER_ID else f"[{display_name} | ID: {uid}] أرسل فيديو:"
+        ))
+        broadcast_to_others(uid, lambda cid: context.bot.send_video(cid, video=vid))
 
 def handle_audio(update: Update, context: CallbackContext):
     uid = update.effective_chat.id
@@ -183,9 +230,17 @@ def handle_audio(update: Update, context: CallbackContext):
         update.message.reply_text("❌ الملف الصوتي أكبر من 50 ميجابايت.")
         return
     aid = audio.file_id
-    alias = f"User{uid}"
-    broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[{alias}] أرسل ملف صوتي:"))
-    broadcast_to_others(uid, lambda cid: context.bot.send_audio(cid, audio=aid))
+    alias = get_user_alias(uid)
+    display_name = get_user_display_name(update.effective_user)
+    
+    if is_admin(uid):
+        broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[Bot] أرسل ملف صوتي:"))
+        broadcast_to_others(uid, lambda cid: context.bot.send_audio(cid, audio=aid))
+    else:
+        broadcast_to_others(uid, lambda cid: context.bot.send_message(
+            cid, f"[{alias}] أرسل ملف صوتي:" if cid != OWNER_ID else f"[{display_name} | ID: {uid}] أرسل ملف صوتي:"
+        ))
+        broadcast_to_others(uid, lambda cid: context.bot.send_audio(cid, audio=aid))
 
 def handle_document(update: Update, context: CallbackContext):
     uid = update.effective_chat.id
@@ -203,9 +258,17 @@ def handle_document(update: Update, context: CallbackContext):
         update.message.reply_text("❌ الملف أكبر من 50 ميجابايت.")
         return
     did = doc.file_id
-    alias = f"User{uid}"
-    broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[{alias}] أرسل ملف:"))
-    broadcast_to_others(uid, lambda cid: context.bot.send_document(cid, document=did))
+    alias = get_user_alias(uid)
+    display_name = get_user_display_name(update.effective_user)
+    
+    if is_admin(uid):
+        broadcast_to_others(uid, lambda cid: context.bot.send_message(cid, f"[Bot] أرسل ملف:"))
+        broadcast_to_others(uid, lambda cid: context.bot.send_document(cid, document=did))
+    else:
+        broadcast_to_others(uid, lambda cid: context.bot.send_message(
+            cid, f"[{alias}] أرسل ملف:" if cid != OWNER_ID else f"[{display_name} | ID: {uid}] أرسل ملف:"
+        ))
+        broadcast_to_others(uid, lambda cid: context.bot.send_document(cid, document=did))
 
 # ───── أوامر الإدارة ──────────────────────────────────────
 def admin_only(func):
