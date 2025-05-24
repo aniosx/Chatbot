@@ -21,9 +21,9 @@ logger = logging.getLogger(__name__)
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
-USE_WEBHOOK = os.getenv("USE_WEBHOOK", "True").lower() == "true"  # الافتراضي Webhook
+USE_WEBHOOK = os.getenv("USE_WEBHOOK", "True").lower() == "true"  # Webhook افتراضيًا
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").rstrip("/")
-PORT = int(os.getenv("PORT", "443"))  # تغيير المنفذ إلى 443 لـ Render
+PORT = int(os.getenv("PORT", "443"))  # منفذ HTTPS الافتراضي لـ Render
 ACTIVE_USERS_FILE = "active_users.json"  # ملف لتخزين المستخدمين النشطين
 
 # ───── حدود الرسائل والملفات ─────────────────────────
@@ -59,14 +59,12 @@ def save_active_users():
     """حفظ قائمة المستخدمين النشطين إلى ملف JSON"""
     try:
         with file_lock:
-            # تحميل القائمة الحالية أولاً لتجنب الكتابة فوقها
             current_users = set()
             try:
                 with open(ACTIVE_USERS_FILE, "r") as f:
                     current_users.update(json.load(f))
             except FileNotFoundError:
                 pass
-            # دمج القائمتين
             current_users.update(active_users)
             with open(ACTIVE_USERS_FILE, "w") as f:
                 json.dump(list(current_users), f)
@@ -127,7 +125,7 @@ def broadcast_to_others(sender_id, func):
                 logger.debug(f"Sending message to user {uid}")
                 func(uid)
                 success = True
-                time.sleep(0.033)  # تأخير 33 مللي ثانية لتجنب حظر Telegram
+                time.sleep(0.033)  # تأخير لتجنب حظر Telegram
             except Exception as e:
                 logger.error(f"Failed to broadcast to {uid}: {e}")
     if not success:
@@ -135,10 +133,14 @@ def broadcast_to_others(sender_id, func):
     return success
 
 # ───── إعداد البوت والفلاسك ───────────────────────────
-bot = Bot(token=TOKEN)
-updater = Updater(token=TOKEN, use_context=True)
-dispatcher: Dispatcher = updater.dispatcher
-app = Flask(__name__)
+try:
+    bot = Bot(token=TOKEN)
+    updater = Updater(token=TOKEN, use_context=True)
+    dispatcher: Dispatcher = updater.dispatcher
+    app = Flask(__name__)
+except Exception as e:
+    logger.error(f"Failed to initialize bot or updater: {e}")
+    raise
 
 # ───── الأوامر الأساسية ───────────────────────────────
 def cmd_start(update: Update, context: CallbackContext):
@@ -439,13 +441,11 @@ dispatcher.add_handler(MessageHandler(Filters.document, handle_document))
 # ───── Main ─────────────────────────────────────────────
 if __name__ == "__main__":
     logger.info(f"Starting bot with OWNER_ID={OWNER_ID}, USE_WEBHOOK={USE_WEBHOOK}, PORT={PORT}")
-    load_active_users()  # تحميل المستخدمين النشطين عند بدء التشغيل
-    if USE_WEBHOOK:
-        set_webhook()
-        logger.info("Starting server with Gunicorn (local fallback to Flask)...")
+    try:
+        load_active_users()  # تحميل المستخدمين النشطين
+        set_webhook()  # إعداد Webhook دائمًا لـ Render Web Service
+        logger.info("Starting server with Gunicorn...")
         app.run(host="0.0.0.0", port=PORT, debug=False)
-    else:
-        delete_webhook()
-        logger.info("Starting polling...")
-        updater.start_polling()
-        updater.idle()
+    except Exception as e:
+        logger.error(f"Failed to start bot: {e}")
+        raise
