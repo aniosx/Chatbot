@@ -5,6 +5,7 @@ import os
 import time
 import logging
 import json
+import threading
 from flask import Flask, request
 from telegram import Bot, Update
 from telegram.ext import Updater, Dispatcher, CommandHandler, MessageHandler, Filters, CallbackContext
@@ -35,16 +36,18 @@ broadcast_timestamps = deque()  # لحد الرسائل المرسلة بين ا
 active_users = set([OWNER_ID])  # تخزين مؤقت للمستخدمين النشطين
 blocked_users = set()  # المستخدمون المحظورون
 user_aliases = {}  # user_id -> alias لتخزين الأسماء المستعارة
+file_lock = threading.Lock()  # قفل لتجنب الكتابة المتزامنة
 
 # ───── وظائف لإدارة المستخدمين النشطين ───────────────
 def load_active_users():
     """تحميل قائمة المستخدمين النشطين من ملف JSON"""
     global active_users
     try:
-        with open(ACTIVE_USERS_FILE, "r") as f:
-            active_ids = json.load(f)
-            active_users.update(active_ids)
-            logger.info(f"Loaded active users: {active_users}")
+        with file_lock:
+            with open(ACTIVE_USERS_FILE, "r") as f:
+                active_ids = json.load(f)
+                active_users.update(active_ids)
+                logger.info(f"Loaded active users: {active_users}")
     except FileNotFoundError:
         logger.info("No active users file found, starting with OWNER_ID only")
         active_users.add(OWNER_ID)
@@ -54,9 +57,19 @@ def load_active_users():
 def save_active_users():
     """حفظ قائمة المستخدمين النشطين إلى ملف JSON"""
     try:
-        with open(ACTIVE_USERS_FILE, "w") as f:
-            json.dump(list(active_users), f)
-        logger.debug(f"Saved active users: {active_users}")
+        with file_lock:
+            # تحميل القائمة الحالية أولاً لتجنب الكتابة فوقها
+            current_users = set()
+            try:
+                with open(ACTIVE_USERS_FILE, "r") as f:
+                    current_users.update(json.load(f))
+            except FileNotFoundError:
+                pass
+            # دمج القائمتين
+            current_users.update(active_users)
+            with open(ACTIVE_USERS_FILE, "w") as f:
+                json.dump(list(current_users), f)
+        logger.debug(f"Saved active users: {current_users}")
     except Exception as e:
         logger.error(f"Error saving active users: {e}")
 
